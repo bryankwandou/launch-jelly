@@ -76,10 +76,10 @@ export class SpaceportSimulation {
   private targetTiltZ = 0;
 
   // Camera Spherical Orbit & Responsive Framing
-  private camSpherical = { theta: 0.28, phi: 1.08, radius: 39.0 };
-  private camTargetSpherical = { theta: 0.28, phi: 1.08, radius: 39.0 };
-  private camLookAt = new THREE.Vector3(0.8, 0.25, -0.4);
-  private camTargetLookAt = new THREE.Vector3(0.8, 0.25, -0.4);
+  private camSpherical = { theta: 0.44, phi: 1.05, radius: 48.5 };
+  private camTargetSpherical = { theta: 0.44, phi: 1.05, radius: 48.5 };
+  private camLookAt = new THREE.Vector3(0.5, 0.35, -0.2);
+  private camTargetLookAt = new THREE.Vector3(0.5, 0.35, -0.2);
 
   // Pointer Interaction State
   private raycaster = new THREE.Raycaster();
@@ -213,14 +213,9 @@ export class SpaceportSimulation {
     this.causticGlowMat = new THREE.MeshBasicMaterial({
       color: JELLY_FLAVOURS.lime.shallowHex,
       transparent: true,
-      opacity: 0.16,
-      blending: THREE.AdditiveBlending,
+      opacity: 0.0,
       depthWrite: false,
     });
-    const causticPatch = new THREE.Mesh(new THREE.PlaneGeometry(16, 16), this.causticGlowMat);
-    causticPatch.rotation.x = -Math.PI / 2;
-    causticPatch.position.set(4.5, BLOCK_BOTTOM_Y + 0.01, -2.5);
-    this.scene.add(causticPatch);
 
     // 5. Build Diorama Group
     this.dioramaGroup = new THREE.Group();
@@ -255,12 +250,12 @@ export class SpaceportSimulation {
     const aspect = this.container.clientWidth / Math.max(1, this.container.clientHeight);
     // Ensure the full 22x22 block + right sidebar never collide on any window aspect ratio
     if (aspect < 1.25) {
-      return 46.0;
+      return 56.0;
     }
     if (aspect < 1.55) {
-      return 41.5;
+      return 51.0;
     }
-    return 38.0;
+    return 47.5;
   }
 
   private buildJellyVolume(): void {
@@ -504,11 +499,11 @@ export class SpaceportSimulation {
     this.cameraPreset = preset;
     if (preset === 'overview') {
       this.camTargetSpherical = {
-        theta: 0.28,
-        phi: 1.08,
+        theta: 0.44,
+        phi: 1.05,
         radius: this.getResponsiveOverviewRadius(),
       };
-      this.camTargetLookAt.set(0.8, 0.25, -0.4);
+      this.camTargetLookAt.set(0.5, 0.35, -0.2);
     } else if (preset === 'pad') {
       this.camTargetSpherical = { theta: 0.22, phi: 1.16, radius: 14.5 };
       this.camTargetLookAt.set(PAD_WORLD_X, 2.8, PAD_WORLD_Z);
@@ -1352,11 +1347,11 @@ export class SpaceportSimulation {
         this.phase === 'landing_burn';
 
       if (inAir) {
-        const focusY = THREE.MathUtils.clamp(bPos.y * 0.48, 0.25, 9.5);
-        this.camTargetLookAt.set(0.8 + bPos.x * 0.18, focusY, -0.4 + bPos.z * 0.18);
+        const focusY = THREE.MathUtils.clamp(bPos.y * 0.48, 0.35, 9.5);
+        this.camTargetLookAt.set(0.5 + bPos.x * 0.18, focusY, -0.2 + bPos.z * 0.18);
         this.camTargetSpherical.radius = baseOverviewRadius + THREE.MathUtils.clamp(bPos.y * 0.45, 0, 12.0);
       } else {
-        this.camTargetLookAt.set(0.8, 0.25, -0.4);
+        this.camTargetLookAt.set(0.5, 0.35, -0.2);
         this.camTargetSpherical.radius = baseOverviewRadius;
       }
     }

@@ -5,7 +5,6 @@ import {
   WATER_LEVEL,
   evaluateSeabedHeight,
 } from './JellyShaders';
-import { SCENE_PALETTE } from '../config/designTokens';
 
 export interface SeabedShaderUniforms {
   uTime: { value: number };
@@ -65,6 +64,11 @@ function pseudoNoise(x: number, y: number): number {
   );
 }
 
+function fractHash(n: number): number {
+  const s = Math.sin(n) * 43758.5453123;
+  return s - Math.floor(s);
+}
+
 export function buildIslandAndSeabed(
   root: THREE.Group,
   initialShallow: THREE.Color,
@@ -82,20 +86,20 @@ export function buildIslandAndSeabed(
     uStorm: { value: 0 },
   };
 
-  // 1. HIGH-RESOLUTION TERRAIN & SEABED MESH WITH CAUSTICS + SHADOWS
+  // 1. HIGH-RESOLUTION TERRAIN & SEABED MESH
   const topGeo = new THREE.PlaneGeometry(size, size, segs, segs);
   topGeo.rotateX(-Math.PI / 2);
 
   const posAttr = topGeo.attributes.position;
   const colors = new Float32Array(posAttr.count * 3);
 
-  const cDrySand = new THREE.Color('#e8dfc8');
-  const cWetSand = new THREE.Color('#cdbda0');
-  const cGrass = new THREE.Color('#6b8c4e');
-  const cGrassDark = new THREE.Color('#4f6d38');
-  const cConcrete = new THREE.Color('#d2cfc8');
-  const cRoad = new THREE.Color('#a8a49c');
-  const cSeabedSand = new THREE.Color('#d8e2d6');
+  const cDrySand = new THREE.Color('#ede6d5');
+  const cWetSand = new THREE.Color('#d8cdb8');
+  const cGrass = new THREE.Color('#719453');
+  const cGrassDark = new THREE.Color('#56773d');
+  const cConcrete = new THREE.Color('#d6d4cd');
+  const cRoad = new THREE.Color('#b5b1a8');
+  const cSeabedSand = new THREE.Color('#eef7f4');
   const cTemp = new THREE.Color();
 
   for (let i = 0; i < posAttr.count; i++) {
@@ -105,32 +109,30 @@ export function buildIslandAndSeabed(
     posAttr.setY(i, y);
 
     const n = pseudoNoise(x, z);
-    if (y > WATER_LEVEL + 0.16) {
+    if (y > WATER_LEVEL + 0.14) {
       const onPadApron = x > -7.2 && x < 5.4 && z > -7.6 && z < -4.2;
       const onPierApron = x > 2.2 && x < 9.2 && z > -3.8 && z < -1.15;
-      const onLZApron = Math.hypot(x - -5.8, z - -1.2) < 1.85;
+      const onLZApron = Math.hypot(x - -3.6, z - -2.8) < 1.55;
       const onRoad =
-        (Math.abs(z - -3.2) < 0.38 && x > -6.5 && x < 5.5) ||
-        (Math.abs(x - -5.8) < 0.38 && z > -5.5 && z < -1.0);
+        (Math.abs(z - -3.2) < 0.34 && x > -6.5 && x < 5.5) ||
+        (Math.abs(x - -3.6) < 0.34 && z > -5.5 && z < -1.2);
 
       if (onPadApron || onPierApron || onLZApron) {
-        cTemp.copy(cConcrete).offsetHSL(0, 0, n * 0.018);
+        cTemp.copy(cConcrete).offsetHSL(0, 0, n * 0.015);
       } else if (onRoad) {
-        cTemp.copy(cRoad).offsetHSL(0, 0, n * 0.015);
+        cTemp.copy(cRoad).offsetHSL(0, 0, n * 0.012);
       } else {
-        // Natural coastal grass patches mixed with warm white/cream island sand
         const grassNoise = pseudoNoise(x * 0.65 + 1.2, z * 0.65 - 0.8);
-        const elevationFactor = THREE.MathUtils.smoothstep(y, WATER_LEVEL + 0.25, WATER_LEVEL + 0.56);
-        const grassMask = THREE.MathUtils.smoothstep(grassNoise + elevationFactor * 0.55, 0.22, 0.65);
-        cTemp.copy(cDrySand).lerp(n > 0 ? cGrass : cGrassDark, grassMask * 0.88);
-        cTemp.offsetHSL(0, 0, n * 0.025);
+        const elevationFactor = THREE.MathUtils.smoothstep(y, WATER_LEVEL + 0.22, WATER_LEVEL + 0.48);
+        const grassMask = THREE.MathUtils.smoothstep(grassNoise + elevationFactor * 0.55, 0.24, 0.66);
+        cTemp.copy(cDrySand).lerp(n > 0 ? cGrass : cGrassDark, grassMask * 0.86);
+        cTemp.offsetHSL(0, 0, n * 0.02);
       }
-    } else if (y > WATER_LEVEL - 0.08) {
-      const t = THREE.MathUtils.smoothstep(y, WATER_LEVEL - 0.08, WATER_LEVEL + 0.16);
+    } else if (y > WATER_LEVEL - 0.06) {
+      const t = THREE.MathUtils.smoothstep(y, WATER_LEVEL - 0.06, WATER_LEVEL + 0.14);
       cTemp.copy(cWetSand).lerp(cDrySand, t);
     } else {
-      // Bright sandy seabed so the shader's Beer-Lambert jelly color & caustics pop vividly!
-      cTemp.copy(cSeabedSand).offsetHSL(0, 0, n * 0.03);
+      cTemp.copy(cSeabedSand).offsetHSL(0, 0, n * 0.02);
     }
 
     colors[i * 3] = cTemp.r;
@@ -143,12 +145,11 @@ export function buildIslandAndSeabed(
 
   const topMat = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    roughness: 0.84,
+    roughness: 0.82,
     metalness: 0.02,
   });
 
-  // Inject real-time underwater Jelly Beer-Lambert absorption + high-frequency sparkling Voronoi caustics
-  // directly onto the shadow-receiving seabed mesh!
+  // Inject bright luminous Jelly Beer-Lambert tint + organic wave-warped Voronoi caustics
   topMat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = seabedUniforms.uTime;
     shader.uniforms.uShallowColor = seabedUniforms.uShallowColor;
@@ -185,6 +186,11 @@ export function buildIslandAndSeabed(
         varying vec3 vCustomLocalPos;
 
         float causticCell(vec2 p, float t) {
+          // Organic wave refraction warp so caustic filaments curve naturally
+          p += 0.24 * vec2(
+            sin(p.y * 1.45 + t * 1.65) + cos(p.x * 0.9 - t * 1.2),
+            cos(p.x * 1.55 - t * 1.45) + sin(p.y * 1.1 + t * 1.3)
+          );
           vec2 i = floor(p);
           vec2 f = fract(p);
           float dMin = 1.0;
@@ -193,8 +199,9 @@ export function buildIslandAndSeabed(
             for (int x = -1; x <= 1; x++) {
               vec2 nb = vec2(float(x), float(y));
               vec2 cellId = i + nb;
-              float h = fract(sin(dot(cellId, vec2(127.1, 311.7))) * 43758.5453);
-              vec2 pt = nb + 0.5 + 0.42 * sin(t * 1.75 + 6.2831 * h + vec2(0.0, 1.57));
+              float h1 = fract(sin(dot(cellId, vec2(127.1, 311.7))) * 43758.5453);
+              float h2 = fract(sin(dot(cellId, vec2(269.5, 183.3))) * 43758.5453);
+              vec2 pt = nb + 0.5 + 0.44 * sin(t * 1.6 + 6.2831 * vec2(h1, h2));
               float d = length(f - pt);
               if (d < dMin) {
                 dSec = dMin;
@@ -204,9 +211,8 @@ export function buildIslandAndSeabed(
               }
             }
           }
-          // Sharp ridge along Voronoi cell boundaries (true optical water caustic web!)
-          float edge = clamp(1.0 - (dSec - dMin) * 3.8, 0.0, 1.0);
-          return pow(edge, 2.6);
+          float edge = clamp(1.0 - (dSec - dMin) * 4.2, 0.0, 1.0);
+          return pow(edge, 2.8);
         }
         `
       )
@@ -215,20 +221,20 @@ export function buildIslandAndSeabed(
         /* glsl */ `
         float waterDepth = ${WATER_LEVEL.toFixed(2)} - vCustomLocalPos.y;
         if (waterDepth > 0.0) {
-          float depthNorm = clamp(waterDepth / 3.8, 0.0, 1.0);
-          float entryBlend = smoothstep(0.0, 0.14, waterDepth);
+          float depthNorm = clamp(waterDepth / 2.8, 0.0, 1.0);
+          float entryBlend = smoothstep(0.0, 0.16, waterDepth);
 
-          // Rich Beer-Lambert jelly volume tint on the sandy floor
-          vec3 jellyBedTint = mix(uShallowColor, uDeepColor, pow(depthNorm, 0.72));
-          gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb * jellyBedTint * 1.28, entryBlend * 0.88);
+          // Luminous translucent jelly tint on the bright sandy seabed
+          vec3 jellyBedTint = mix(uShallowColor, uDeepColor, pow(depthNorm, 0.75));
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb * jellyBedTint * 1.12, entryBlend * 0.85);
 
-          // Dual-scale interferometric Voronoi caustic web dancing across the seabed
-          vec2 uv = vCustomLocalPos.xz * 0.92;
-          float c1 = causticCell(uv * 1.15 + vec2(uTime * 0.14, -uTime * 0.11), uTime);
-          float c2 = causticCell(uv * 1.75 - vec2(uTime * 0.10, uTime * 0.15), uTime * 1.25);
-          float causticWeb = (c1 * 0.65 + c2 * 0.55) * entryBlend * (1.0 - depthNorm * 0.35) * (1.0 - uStorm * 0.6);
+          // Dual-octave organic caustic web
+          vec2 uv = vCustomLocalPos.xz * 0.82;
+          float c1 = causticCell(uv * 1.1 + vec2(uTime * 0.12, -uTime * 0.09), uTime);
+          float c2 = causticCell(uv * 1.75 - vec2(uTime * 0.09, uTime * 0.13), uTime * 1.2);
+          float causticWeb = (c1 * 0.62 + c2 * 0.48) * entryBlend * (1.0 - depthNorm * 0.25) * (1.0 - uStorm * 0.55);
 
-          gl_FragColor.rgb += uCausticColor * causticWeb * 0.58;
+          gl_FragColor.rgb += uCausticColor * causticWeb * 0.46;
         }
         #include <dithering_fragment>
         `
@@ -244,7 +250,7 @@ export function buildIslandAndSeabed(
   // 2. STRATIFIED GEOLOGICAL CROSS-SECTION WALLS
   buildStratifiedRockWalls(root, segs);
 
-  // 3. SPACEPORT ARCHITECTURE (HANGAR, RAILS, LAUNCH COMPLEX 1, SCOREBOARD, LZ-1, HARBOUR PIER & CRANE)
+  // 3. SPACEPORT ARCHITECTURE
   const { hangarDoorLeft, hangarDoorRight } = buildHangarAndCrawlerway(root);
   buildLaunchComplexOne(root);
   const scoreboard = buildDigitalScoreboard(root);
@@ -278,7 +284,7 @@ export function buildIslandAndSeabed(
 }
 
 function buildStratifiedRockWalls(root: THREE.Group, segs: number): void {
-  const yRows = 32;
+  const yRows = 24;
   const walls: {
     startX: number;
     startZ: number;
@@ -293,12 +299,12 @@ function buildStratifiedRockWalls(root: THREE.Group, segs: number): void {
     { startX: -BLOCK_HALF_SIZE, startZ: -BLOCK_HALF_SIZE, endX: -BLOCK_HALF_SIZE, endZ: BLOCK_HALF_SIZE, nx: -1, nz: 0 },
   ];
 
-  const cChalk = new THREE.Color('#e8e2d5');
-  const cSandstone = new THREE.Color('#d2c0a0');
-  const cOchre = new THREE.Color('#b89972');
-  const cTerracotta = new THREE.Color('#a37b5c');
-  const cShale = new THREE.Color('#786c61');
-  const cBedrock = new THREE.Color('#524b44');
+  // Bright coastal limestone & chalk strata matching crop_top_island.png
+  const cChalk = new THREE.Color('#f4f1ea');
+  const cLimestone = new THREE.Color('#e6dfd2');
+  const cSandstone = new THREE.Color('#d6cab6');
+  const cOchre = new THREE.Color('#c4b299');
+  const cBase = new THREE.Color('#9c9286');
   const cTemp = new THREE.Color();
 
   walls.forEach((wall) => {
@@ -320,22 +326,20 @@ function buildStratifiedRockWalls(root: THREE.Group, segs: number): void {
       norm.setXYZ(i, wall.nx, 0, wall.nz);
 
       const depthBelowSurface = topY - wy;
-      const waveFold = Math.sin(wx * 0.25 + wz * 0.22) * 0.18;
+      const waveFold = Math.sin(wx * 0.25 + wz * 0.22) * 0.08;
       const d = depthBelowSurface + waveFold;
-      const striation = Math.sin(wy * 14.0) * 0.025 + Math.cos(wy * 29.0) * 0.015;
+      const striation = Math.sin(wy * 18.0) * 0.018;
 
-      if (d < 0.42) {
+      if (d < 0.28) {
         cTemp.copy(cChalk);
+      } else if (d < 0.65) {
+        cTemp.copy(cLimestone);
       } else if (d < 1.15) {
         cTemp.copy(cSandstone);
-      } else if (d < 1.95) {
+      } else if (d < 1.65) {
         cTemp.copy(cOchre);
-      } else if (d < 2.75) {
-        cTemp.copy(cTerracotta);
-      } else if (d < 3.65) {
-        cTemp.copy(cShale);
       } else {
-        cTemp.copy(cBedrock);
+        cTemp.copy(cBase);
       }
 
       cTemp.offsetHSL(0, 0, striation);
@@ -349,7 +353,7 @@ function buildStratifiedRockWalls(root: THREE.Group, segs: number): void {
 
     const mat = new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.9,
+      roughness: 0.88,
       metalness: 0.02,
     });
     const mesh = new THREE.Mesh(geo, mat);
@@ -364,7 +368,7 @@ function buildStratifiedRockWalls(root: THREE.Group, segs: number): void {
   baseGeo.translate(0, BLOCK_BOTTOM_Y, 0);
   const baseMesh = new THREE.Mesh(
     baseGeo,
-    new THREE.MeshStandardMaterial({ color: '#47423c', roughness: 0.95 })
+    new THREE.MeshStandardMaterial({ color: '#8c8378', roughness: 0.92 })
   );
   baseMesh.castShadow = true;
   root.add(baseMesh);
@@ -379,114 +383,104 @@ function buildHangarAndCrawlerway(root: THREE.Group): {
   hangarGroup.position.set(-4.2, baseY, -6.2);
   root.add(hangarGroup);
 
-  const concreteMat = new THREE.MeshStandardMaterial({ color: '#d0cdc4', roughness: 0.85 });
-  const wallMat = new THREE.MeshStandardMaterial({ color: '#eceae4', roughness: 0.48, metalness: 0.18 });
-  const slateTrimMat = new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.45, metalness: 0.45 });
-  const windowMat = new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.2, metalness: 0.8 });
-  const interiorMat = new THREE.MeshStandardMaterial({ color: '#1e242d', roughness: 0.8 });
+  const concreteMat = new THREE.MeshStandardMaterial({ color: '#d6d3cb', roughness: 0.85 });
+  const wallMat = new THREE.MeshStandardMaterial({ color: '#f2f3f5', roughness: 0.45, metalness: 0.12 });
+  const ribTrimMat = new THREE.MeshStandardMaterial({ color: '#b8c2cc', roughness: 0.45, metalness: 0.3 });
+  const windowMat = new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.25, metalness: 0.6 });
+  const interiorMat = new THREE.MeshStandardMaterial({ color: '#27303d', roughness: 0.8 });
 
-  // Concrete apron beneath Hangar and Crawlerway
-  const padSlab = new THREE.Mesh(new THREE.BoxGeometry(10.8, 0.16, 3.1), concreteMat);
-  padSlab.position.set(2.8, 0.04, 0);
+  const padSlab = new THREE.Mesh(new THREE.BoxGeometry(10.8, 0.12, 3.0), concreteMat);
+  padSlab.position.set(2.8, 0.03, 0);
   padSlab.receiveShadow = true;
   padSlab.castShadow = true;
   hangarGroup.add(padSlab);
 
   const hLen = 4.2;
-  const hWid = 2.15;
-  const hHei = 1.48;
+  const hWid = 2.05;
+  const hHei = 1.38;
 
-  // Hangar Walls
-  const backWall = new THREE.Mesh(new THREE.BoxGeometry(0.14, hHei, hWid), wallMat);
-  backWall.position.set(-hLen / 2, hHei / 2 + 0.1, 0);
+  const backWall = new THREE.Mesh(new THREE.BoxGeometry(0.12, hHei, hWid), wallMat);
+  backWall.position.set(-hLen / 2, hHei / 2 + 0.08, 0);
   backWall.castShadow = true;
   hangarGroup.add(backWall);
 
-  const northWall = new THREE.Mesh(new THREE.BoxGeometry(hLen, hHei, 0.14), wallMat);
-  northWall.position.set(0, hHei / 2 + 0.1, -hWid / 2);
+  const northWall = new THREE.Mesh(new THREE.BoxGeometry(hLen, hHei, 0.12), wallMat);
+  northWall.position.set(0, hHei / 2 + 0.08, -hWid / 2);
   northWall.castShadow = true;
   hangarGroup.add(northWall);
 
-  const southWall = new THREE.Mesh(new THREE.BoxGeometry(hLen, hHei, 0.14), wallMat);
-  southWall.position.set(0, hHei / 2 + 0.1, hWid / 2);
+  const southWall = new THREE.Mesh(new THREE.BoxGeometry(hLen, hHei, 0.12), wallMat);
+  southWall.position.set(0, hHei / 2 + 0.08, hWid / 2);
   southWall.castShadow = true;
   hangarGroup.add(southWall);
 
-  // Horizontal glazed Clerestory Window strips along South wall
-  for (let w = -4; w <= 4; w++) {
-    const win = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.22, 0.16), windowMat);
-    win.position.set(w * 0.42, hHei * 0.72, hWid / 2);
+  // Small clerestory windows along top of South wall (matching crop_top_island.png)
+  for (let w = -5; w <= 5; w++) {
+    const win = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.14), windowMat);
+    win.position.set(w * 0.35, hHei * 0.78, hWid / 2);
     hangarGroup.add(win);
   }
 
-  // Stepped Arched Roof with External Structural Portal Frames (matching crop_top_island.png)
-  const roofLower = new THREE.Mesh(new THREE.BoxGeometry(hLen + 0.12, 0.14, hWid + 0.16), wallMat);
-  roofLower.position.set(0, hHei + 0.14, 0);
+  // Light architectural roof with skylight crown & subtle external ribs
+  const roofLower = new THREE.Mesh(new THREE.BoxGeometry(hLen + 0.08, 0.1, hWid + 0.12), wallMat);
+  roofLower.position.set(0, hHei + 0.1, 0);
   roofLower.castShadow = true;
   hangarGroup.add(roofLower);
 
-  const roofCrown = new THREE.Mesh(new THREE.BoxGeometry(hLen - 0.1, 0.16, hWid * 0.62), slateTrimMat);
-  roofCrown.position.set(0, hHei + 0.26, 0);
+  const roofCrown = new THREE.Mesh(new THREE.BoxGeometry(hLen - 0.12, 0.12, hWid * 0.56), ribTrimMat);
+  roofCrown.position.set(0, hHei + 0.18, 0);
   roofCrown.castShadow = true;
   hangarGroup.add(roofCrown);
 
-  for (let r = -4; r <= 4; r++) {
-    const rx = r * 0.48;
-    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.05, hHei + 0.24, hWid + 0.22), slateTrimMat);
-    rib.position.set(rx, hHei / 2 + 0.14, 0);
+  for (let r = -5; r <= 5; r++) {
+    const rx = r * 0.38;
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.035, hHei + 0.14, hWid + 0.16), ribTrimMat);
+    rib.position.set(rx, hHei / 2 + 0.1, 0);
     hangarGroup.add(rib);
   }
 
-  // Open Front Portal Frame on +X face
-  const portalTop = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.26, hWid + 0.24), slateTrimMat);
-  portalTop.position.set(hLen / 2, hHei + 0.18, 0);
-  hangarGroup.add(portalTop);
+  // Tall Open Portal Frame at +X entrance (matching crop_top_island.png)
+  const portalFrame = new THREE.Mesh(new THREE.BoxGeometry(0.12, hHei + 0.36, hWid + 0.18), ribTrimMat);
+  portalFrame.position.set(hLen / 2, (hHei + 0.36) / 2 + 0.08, 0);
+  hangarGroup.add(portalFrame);
 
-  // Interior Dark Floor
-  const intFloor = new THREE.Mesh(new THREE.BoxGeometry(hLen - 0.2, 0.04, hWid - 0.2), interiorMat);
-  intFloor.position.set(0, 0.13, 0);
-  hangarGroup.add(intFloor);
+  const portalCutout = new THREE.Mesh(new THREE.BoxGeometry(0.16, hHei - 0.04, hWid - 0.16), interiorMat);
+  portalCutout.position.set(hLen / 2, hHei / 2 + 0.08, 0);
+  hangarGroup.add(portalCutout);
 
-  // Bi-parting Hangar Doors
-  const doorMat = new THREE.MeshStandardMaterial({ color: '#3b4659', roughness: 0.5, metalness: 0.4 });
-  const hangarDoorLeft = new THREE.Mesh(new THREE.BoxGeometry(0.1, hHei - 0.08, hWid * 0.46), doorMat);
-  hangarDoorLeft.position.set(hLen / 2, hHei / 2 + 0.1, -hWid * 0.24);
+  const hangarDoorLeft = new THREE.Mesh(new THREE.BoxGeometry(0.08, hHei - 0.08, hWid * 0.44), interiorMat);
+  hangarDoorLeft.position.set(hLen / 2, hHei / 2 + 0.08, -hWid * 0.22);
   hangarGroup.add(hangarDoorLeft);
 
-  const hangarDoorRight = new THREE.Mesh(new THREE.BoxGeometry(0.1, hHei - 0.08, hWid * 0.46), doorMat);
-  hangarDoorRight.position.set(hLen / 2, hHei / 2 + 0.1, hWid * 0.24);
+  const hangarDoorRight = new THREE.Mesh(new THREE.BoxGeometry(0.08, hHei - 0.08, hWid * 0.44), interiorMat);
+  hangarDoorRight.position.set(hLen / 2, hHei / 2 + 0.08, hWid * 0.22);
   hangarGroup.add(hangarDoorRight);
 
-  // Secondary Support Building + White Crew Transport Bus in front of Hangar
-  const annex = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.68, 1.15), wallMat);
-  annex.position.set(-1.3, 0.38, 2.15);
+  // Secondary Support Building + White Crew Transport Van in front of Hangar
+  const annex = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.58, 1.05), wallMat);
+  annex.position.set(-1.3, 0.32, 2.05);
   annex.castShadow = true;
   annex.receiveShadow = true;
   hangarGroup.add(annex);
 
-  const annexRoof = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.08, 1.22), concreteMat);
-  annexRoof.position.set(-1.3, 0.75, 2.15);
-  hangarGroup.add(annexRoof);
-
-  const crewBus = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.26, 0.32), wallMat);
-  crewBus.position.set(-1.2, 0.22, 1.25);
+  const crewBus = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.22, 0.28), wallMat);
+  crewBus.position.set(-1.2, 0.18, 1.2);
   crewBus.castShadow = true;
   hangarGroup.add(crewBus);
 
-  // Twin Steel Crawler Rails leading to Launch Complex 1 (at x = +1.8, dx = 6.0)
-  const railMat = new THREE.MeshStandardMaterial({ color: '#475569', roughness: 0.35, metalness: 0.78 });
-  const sleeperMat = new THREE.MeshStandardMaterial({ color: '#645344', roughness: 0.9 });
+  const railMat = new THREE.MeshStandardMaterial({ color: '#64748b', roughness: 0.4, metalness: 0.7 });
+  const sleeperMat = new THREE.MeshStandardMaterial({ color: '#786858', roughness: 0.9 });
 
-  [-0.32, 0.32].forEach((rz) => {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.05, 0.06), railMat);
-    rail.position.set(3.1, 0.15, rz);
+  [-0.28, 0.28].forEach((rz) => {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(6.2, 0.04, 0.05), railMat);
+    rail.position.set(3.1, 0.11, rz);
     hangarGroup.add(rail);
   });
 
-  for (let s = 0; s < 24; s++) {
-    const sx = 0.2 + s * 0.26;
-    const sleeper = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.025, 0.88), sleeperMat);
-    sleeper.position.set(sx, 0.13, 0);
+  for (let s = 0; s < 22; s++) {
+    const sx = 0.25 + s * 0.27;
+    const sleeper = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.02, 0.78), sleeperMat);
+    sleeper.position.set(sx, 0.095, 0);
     hangarGroup.add(sleeper);
   }
 
@@ -503,61 +497,49 @@ function buildLaunchComplexOne(root: THREE.Group): void {
   lcGroup.position.set(PAD_WORLD_X, baseY, PAD_WORLD_Z);
   root.add(lcGroup);
 
-  const concreteMat = new THREE.MeshStandardMaterial({ color: '#bcb8b0', roughness: 0.82 });
-  const darkTrenchMat = new THREE.MeshStandardMaterial({ color: '#272a30', roughness: 0.9 });
+  const concreteMat = new THREE.MeshStandardMaterial({ color: '#c4c1b8', roughness: 0.82 });
+  const darkTrenchMat = new THREE.MeshStandardMaterial({ color: '#2b2f36', roughness: 0.9 });
   const redMat = new THREE.MeshStandardMaterial({ color: '#d93829', roughness: 0.42 });
   const whiteMat = new THREE.MeshStandardMaterial({ color: '#f5f4f0', roughness: 0.38 });
   const blueMat = new THREE.MeshStandardMaterial({ color: '#2563eb', roughness: 0.4 });
   const steelMat = new THREE.MeshStandardMaterial({ color: '#64748b', roughness: 0.45, metalness: 0.6 });
 
-  // Sloped Concrete Launch Pad Pyramid & Flame Trench Chute extending toward the shore (+Z)
-  const padPyramid = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.55, 0.54, 4), concreteMat);
+  const padPyramid = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 1.45, 0.48, 4), concreteMat);
   padPyramid.rotation.y = Math.PI / 4;
-  padPyramid.position.set(0, 0.32, 0);
+  padPyramid.position.set(0, 0.28, 0);
   padPyramid.castShadow = true;
   padPyramid.receiveShadow = true;
   lcGroup.add(padPyramid);
 
-  const flameChute = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.26, 2.35), darkTrenchMat);
-  flameChute.position.set(0, 0.18, 0.85);
+  const flameChute = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.22, 2.15), darkTrenchMat);
+  flameChute.position.set(0, 0.16, 0.82);
   flameChute.rotation.x = 0.08;
   lcGroup.add(flameChute);
 
-  const chuteWalls = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.32, 2.15), concreteMat);
-  chuteWalls.position.set(0, 0.17, 0.85);
+  const chuteWalls = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.28, 2.0), concreteMat);
+  chuteWalls.position.set(0, 0.15, 0.82);
   chuteWalls.receiveShadow = true;
   lcGroup.add(chuteWalls);
 
-  // 4 Tall Slender Red-and-White Lightning Arrestor Towers + Catenary Wires
   const towerOffsets = [
-    [-1.42, -1.28],
-    [1.42, -1.28],
-    [1.42, 1.28],
-    [-1.42, 1.28],
+    [-1.35, -1.22],
+    [1.35, -1.22],
+    [1.35, 1.22],
+    [-1.35, 1.22],
   ];
-  const towerHeight = 5.2;
+  const towerHeight = 5.0;
   const towerTops: THREE.Vector3[] = [];
 
   towerOffsets.forEach(([tx, tz]) => {
     const tGroup = new THREE.Group();
-    tGroup.position.set(tx, 0.1, tz);
+    tGroup.position.set(tx, 0.08, tz);
     lcGroup.add(tGroup);
-
-    // Lattice tripod base legs
-    for (let leg = 0; leg < 3; leg++) {
-      const a = (leg * Math.PI * 2) / 3;
-      const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.028, 0.9, 6), steelMat);
-      strut.position.set(Math.cos(a) * 0.12, 0.42, Math.sin(a) * 0.12);
-      strut.rotation.z = Math.cos(a) * 0.14;
-      strut.rotation.x = -Math.sin(a) * 0.14;
-      tGroup.add(strut);
-    }
 
     const bands = 9;
     const bH = towerHeight / bands;
     for (let b = 0; b < bands; b++) {
-      const rBot = THREE.MathUtils.lerp(0.068, 0.018, b / bands);
-      const rTop = THREE.MathUtils.lerp(0.068, 0.018, (b + 1) / bands);
+      const rBot = THREE.MathUtils.lerp(0.058, 0.015, b / bands);
+      const rTop = THREE.MathUtils.lerp(0.058, 0.015, (b + 1) / bands);
       const seg = new THREE.Mesh(
         new THREE.CylinderGeometry(rTop, rBot, bH, 8),
         b % 2 === 0 ? whiteMat : redMat
@@ -567,15 +549,14 @@ function buildLaunchComplexOne(root: THREE.Group): void {
       tGroup.add(seg);
     }
 
-    const finSpire = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.016, 0.75, 6), whiteMat);
-    finSpire.position.y = towerHeight + 0.36;
+    const finSpire = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.014, 0.65, 6), whiteMat);
+    finSpire.position.y = towerHeight + 0.32;
     tGroup.add(finSpire);
 
-    towerTops.push(new THREE.Vector3(tx, towerHeight + 0.68, tz));
+    towerTops.push(new THREE.Vector3(tx, towerHeight + 0.6, tz));
   });
 
-  // Delicate Catenary Arrestor Cables
-  const wireMat = new THREE.LineBasicMaterial({ color: '#64748b', transparent: true, opacity: 0.58 });
+  const wireMat = new THREE.LineBasicMaterial({ color: '#94a3b8', transparent: true, opacity: 0.5 });
   for (let i = 0; i < 4; i++) {
     const pA = towerTops[i];
     const pB = towerTops[(i + 1) % 4];
@@ -583,50 +564,50 @@ function buildLaunchComplexOne(root: THREE.Group): void {
     for (let s = 0; s <= 16; s++) {
       const t = s / 16;
       const p = new THREE.Vector3().lerpVectors(pA, pB, t);
-      p.y -= Math.sin(t * Math.PI) * 0.32;
+      p.y -= Math.sin(t * Math.PI) * 0.28;
       pts.push(p);
     }
     lcGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), wireMat));
   }
 
-  // Blue-and-White Spherical Water Deluge Tower on 4 Lattice Legs (left of pad, matching crop_top_island.png)
+  // Blue-and-White Spherical Water Tower
   const wtGroup = new THREE.Group();
-  wtGroup.position.set(-1.15, 0.1, -0.55);
+  wtGroup.position.set(-1.1, 0.08, -0.5);
   lcGroup.add(wtGroup);
 
-  const wtSphere = new THREE.Mesh(new THREE.SphereGeometry(0.36, 20, 16), whiteMat);
-  wtSphere.position.y = 2.05;
+  const wtSphere = new THREE.Mesh(new THREE.SphereGeometry(0.32, 20, 16), whiteMat);
+  wtSphere.position.y = 1.95;
   wtSphere.scale.y = 0.85;
   wtSphere.castShadow = true;
   wtGroup.add(wtSphere);
 
-  const wtBand = new THREE.Mesh(new THREE.CylinderGeometry(0.365, 0.365, 0.14, 20), blueMat);
-  wtBand.position.y = 2.05;
+  const wtBand = new THREE.Mesh(new THREE.CylinderGeometry(0.325, 0.325, 0.12, 20), blueMat);
+  wtBand.position.y = 1.95;
   wtGroup.add(wtBand);
 
-  const wtRiser = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 1.9, 10), whiteMat);
-  wtRiser.position.y = 0.95;
+  const wtRiser = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.075, 1.8, 10), whiteMat);
+  wtRiser.position.y = 0.9;
   wtRiser.castShadow = true;
   wtGroup.add(wtRiser);
 
   for (let l = 0; l < 4; l++) {
     const a = (l * Math.PI) / 2 + Math.PI / 4;
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.028, 1.95, 6), steelMat);
-    leg.position.set(Math.cos(a) * 0.22, 0.95, Math.sin(a) * 0.22);
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.024, 1.85, 6), steelMat);
+    leg.position.set(Math.cos(a) * 0.2, 0.9, Math.sin(a) * 0.2);
     leg.rotation.z = Math.cos(a) * 0.06;
     leg.rotation.x = -Math.sin(a) * 0.06;
     wtGroup.add(leg);
   }
 
-  // Cryogenic White LOX Sphere + Horizontal RP-1 Tank East of the Pad
-  const loxSphere = new THREE.Mesh(new THREE.SphereGeometry(0.46, 20, 20), whiteMat);
-  loxSphere.position.set(2.35, 0.58, -0.45);
+  // White LOX Sphere + Horizontal RP-1 Tank East of the Pad
+  const loxSphere = new THREE.Mesh(new THREE.SphereGeometry(0.42, 20, 20), whiteMat);
+  loxSphere.position.set(2.25, 0.52, -0.45);
   loxSphere.castShadow = true;
   lcGroup.add(loxSphere);
 
-  const rpTank = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 1.25, 16), whiteMat);
+  const rpTank = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 1.15, 16), whiteMat);
   rpTank.rotation.z = Math.PI / 2;
-  rpTank.position.set(2.15, 0.32, 0.35);
+  rpTank.position.set(2.05, 0.28, 0.35);
   rpTank.castShadow = true;
   lcGroup.add(rpTank);
 }
@@ -651,22 +632,22 @@ function buildDigitalScoreboard(root: THREE.Group): {
   root.add(boardGroup);
 
   const frameMat = new THREE.MeshStandardMaterial({ color: '#181c23', roughness: 0.5, metalness: 0.6 });
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.46, 0.1), frameMat);
-  frame.position.y = 0.52;
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.42, 0.09), frameMat);
+  frame.position.y = 0.48;
   frame.castShadow = true;
   boardGroup.add(frame);
 
-  [-0.4, 0.4].forEach((px) => {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.55, 8), frameMat);
-    post.position.set(px, 0.26, 0);
+  [-0.36, 0.36].forEach((px) => {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.5, 8), frameMat);
+    post.position.set(px, 0.24, 0);
     boardGroup.add(post);
   });
 
   const screen = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.06, 0.38),
+    new THREE.PlaneGeometry(0.96, 0.34),
     new THREE.MeshBasicMaterial({ map: texture })
   );
-  screen.position.set(0, 0.52, 0.055);
+  screen.position.set(0, 0.48, 0.05);
   boardGroup.add(screen);
 
   return {
@@ -691,87 +672,82 @@ function buildLandingZoneAndRadar(root: THREE.Group): {
   lzGroup.position.set(LZ_WORLD_X, lzY, LZ_WORLD_Z);
   root.add(lzGroup);
 
-  const padMat = new THREE.MeshStandardMaterial({ color: '#d2cfc6', roughness: 0.8 });
-  const padDisk = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.22, 0.08, 32), padMat);
-  padDisk.position.y = 0.04;
+  const padMat = new THREE.MeshStandardMaterial({ color: '#d8d5cc', roughness: 0.8 });
+  const padDisk = new THREE.Mesh(new THREE.CylinderGeometry(1.08, 1.15, 0.06, 32), padMat);
+  padDisk.position.y = 0.03;
   padDisk.receiveShadow = true;
   padDisk.name = 'landing_pad_target';
   lzGroup.add(padDisk);
 
-  const ringMat = new THREE.MeshBasicMaterial({ color: '#64748b', side: THREE.DoubleSide });
-  const targetRing = new THREE.Mesh(new THREE.RingGeometry(0.82, 0.92, 32), ringMat);
+  const ringMat = new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.DoubleSide });
+  const targetRing = new THREE.Mesh(new THREE.RingGeometry(0.76, 0.85, 32), ringMat);
   targetRing.rotation.x = -Math.PI / 2;
-  targetRing.position.y = 0.085;
+  targetRing.position.y = 0.065;
   lzGroup.add(targetRing);
 
   const xMarkMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
   [-1, 1].forEach((dir) => {
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.01, 0.09), xMarkMat);
-    bar.position.y = 0.086;
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.01, 0.08), xMarkMat);
+    bar.position.y = 0.066;
     bar.rotation.y = (dir * Math.PI) / 4;
     lzGroup.add(bar);
   });
 
-  // Red Range Fire Truck parked near LZ-1 (matching crop_top_island.png)
   const fireTruck = new THREE.Mesh(
-    new THREE.BoxGeometry(0.38, 0.16, 0.18),
+    new THREE.BoxGeometry(0.34, 0.14, 0.16),
     new THREE.MeshStandardMaterial({ color: '#dc2626', roughness: 0.4 })
   );
-  fireTruck.position.set(1.45, 0.12, 0.15);
+  fireTruck.position.set(1.38, 0.1, 0.15);
   fireTruck.rotation.y = -0.3;
   fireTruck.castShadow = true;
   lzGroup.add(fireTruck);
 
-  // White Tracking Station Building + Solar Array + Rotating Radar Dish on West Spit
-  const whiteMat = new THREE.MeshStandardMaterial({ color: '#f1efe9', roughness: 0.45 });
-  const radarBldg = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.48, 0.72), whiteMat);
-  radarBldg.position.set(-2.6, 0.26, 1.1);
+  const whiteMat = new THREE.MeshStandardMaterial({ color: '#f4f3ef', roughness: 0.45 });
+  const radarBldg = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.42, 0.65), whiteMat);
+  radarBldg.position.set(-2.5, 0.22, 1.05);
   radarBldg.rotation.y = 0.35;
   radarBldg.castShadow = true;
   lzGroup.add(radarBldg);
 
-  // Solar panels next to tracking station
-  const solarMat = new THREE.MeshStandardMaterial({ color: '#1e3a8a', roughness: 0.25, metalness: 0.7 });
+  const solarMat = new THREE.MeshStandardMaterial({ color: '#475569', roughness: 0.3, metalness: 0.6 });
   for (let s = 0; s < 3; s++) {
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.03, 0.28), solarMat);
-    panel.position.set(-3.45, 0.16, 1.0 + s * 0.36);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.025, 0.24), solarMat);
+    panel.position.set(-3.35, 0.14, 0.95 + s * 0.32);
     panel.rotation.x = 0.35;
     lzGroup.add(panel);
   }
 
-  // Rotating Radar Dish
   const radarPedestal = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.1, 0.14, 0.42, 12),
+    new THREE.CylinderGeometry(0.08, 0.12, 0.38, 12),
     whiteMat
   );
-  radarPedestal.position.set(-2.1, 0.22, -0.35);
+  radarPedestal.position.set(-2.0, 0.2, -0.35);
   lzGroup.add(radarPedestal);
 
   const radarDish = new THREE.Group();
-  radarDish.position.set(-2.1, 0.5, -0.35);
+  radarDish.position.set(-2.0, 0.45, -0.35);
   lzGroup.add(radarDish);
 
   const dishBowl = new THREE.Mesh(
-    new THREE.SphereGeometry(0.34, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.42),
+    new THREE.SphereGeometry(0.3, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.42),
     new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.3, side: THREE.DoubleSide })
   );
   dishBowl.rotation.x = -Math.PI * 0.68;
   dishBowl.castShadow = true;
   radarDish.add(dishBowl);
 
-  // Wind Sock Mast
   const poleMat = new THREE.MeshStandardMaterial({ color: '#94a3b8', metalness: 0.6, roughness: 0.3 });
-  const windPole = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.03, 1.05, 8), poleMat);
-  windPole.position.set(-0.95, 0.52, 1.15);
+  const windPole = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.025, 0.95, 8), poleMat);
+  windPole.position.set(-0.95, 0.48, 1.1);
   lzGroup.add(windPole);
 
   const windSockPivot = new THREE.Group();
-  windSockPivot.position.set(-0.95, 1.02, 1.15);
+  windSockPivot.position.set(-0.95, 0.94, 1.1);
   lzGroup.add(windSockPivot);
 
-  const sockGeo = new THREE.ConeGeometry(0.085, 0.42, 10, 1, true);
+  const sockGeo = new THREE.ConeGeometry(0.075, 0.36, 10, 1, true);
   sockGeo.rotateZ(-Math.PI / 2);
-  sockGeo.translate(0.21, 0, 0);
+  sockGeo.translate(0.18, 0, 0);
   const windSockCone = new THREE.Mesh(
     sockGeo,
     new THREE.MeshStandardMaterial({ color: '#ea580c', roughness: 0.6, side: THREE.DoubleSide })
@@ -801,134 +777,124 @@ function buildHarbourPierAndCrane(root: THREE.Group): {
   pierGroup.position.set(pierX, pierY, pierZ);
   root.add(pierGroup);
 
-  const concreteMat = new THREE.MeshStandardMaterial({ color: '#c8c5bc', roughness: 0.82 });
-  const darkPilingMat = new THREE.MeshStandardMaterial({ color: '#272c35', roughness: 0.88 });
+  const concreteMat = new THREE.MeshStandardMaterial({ color: '#d0cdc4', roughness: 0.82 });
+  const darkPilingMat = new THREE.MeshStandardMaterial({ color: '#2b303a', roughness: 0.88 });
   const yellowMat = new THREE.MeshStandardMaterial({ color: '#eab308', roughness: 0.4, metalness: 0.3 });
   const orangeRedMat = new THREE.MeshStandardMaterial({ color: '#dc4a26', roughness: 0.42, metalness: 0.25 });
   const whiteTrussMat = new THREE.MeshStandardMaterial({ color: '#e2e8f0', roughness: 0.4, metalness: 0.5 });
 
-  // Heavy Concrete Pier Apron with Vertical Fender Pilings along the Quay Wall (matching crop_top_island.png)
-  const quayDeck = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.72, 2.2), concreteMat);
-  quayDeck.position.set(0, -0.22, 0.25);
+  const quayDeck = new THREE.Mesh(new THREE.BoxGeometry(5.5, 0.65, 2.1), concreteMat);
+  quayDeck.position.set(0, -0.2, 0.25);
   quayDeck.castShadow = true;
   quayDeck.receiveShadow = true;
   pierGroup.add(quayDeck);
 
   for (let i = -8; i <= 8; i++) {
-    const fx = i * 0.32;
-    const piling = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.68, 0.09), darkPilingMat);
-    piling.position.set(fx, -0.2, 1.38);
+    const fx = i * 0.31;
+    const piling = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.62, 0.08), darkPilingMat);
+    piling.position.set(fx, -0.18, 1.32);
     pierGroup.add(piling);
   }
 
-  // Two Yellow Portal Straddle Frames on the Pier (matching crop_top_island.png)
-  [-1.85, 1.85].forEach((gx) => {
+  [-1.8, 1.8].forEach((gx) => {
     const gFrame = new THREE.Group();
-    gFrame.position.set(gx, 0.14, 0.65);
+    gFrame.position.set(gx, 0.12, 0.62);
     pierGroup.add(gFrame);
 
-    const topBar = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.06, 0.42), yellowMat);
-    topBar.position.y = 0.42;
+    const topBar = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.38), yellowMat);
+    topBar.position.y = 0.38;
     topBar.castShadow = true;
     gFrame.add(topBar);
 
     [
-      [-0.24, -0.18],
-      [0.24, -0.18],
-      [-0.24, 0.18],
-      [0.24, 0.18],
+      [-0.22, -0.16],
+      [0.22, -0.16],
+      [-0.22, 0.16],
+      [0.22, 0.16],
     ].forEach(([lx, lz]) => {
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.42, 6), yellowMat);
-      leg.position.set(lx, 0.21, lz);
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.38, 6), yellowMat);
+      leg.position.set(lx, 0.19, lz);
       gFrame.add(leg);
     });
   });
 
-  // Port Warehouse Building behind the crane
   const warehouse = new THREE.Mesh(
-    new THREE.BoxGeometry(1.85, 0.68, 0.95),
-    new THREE.MeshStandardMaterial({ color: '#e2e0d8', roughness: 0.6 })
+    new THREE.BoxGeometry(1.75, 0.62, 0.88),
+    new THREE.MeshStandardMaterial({ color: '#e8e6df', roughness: 0.6 })
   );
-  warehouse.position.set(0.85, 0.48, -0.55);
+  warehouse.position.set(0.85, 0.42, -0.52);
   warehouse.castShadow = true;
   warehouse.receiveShadow = true;
   pierGroup.add(warehouse);
 
-  // Detailed Open-Lattice Truss Port Crane (matching crop_top_island.png: red cab + tall angled lattice boom!)
-  const craneBase = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.28, 0.88), darkPilingMat);
-  craneBase.position.set(-0.35, 0.28, 0.55);
+  const craneBase = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.24, 0.82), darkPilingMat);
+  craneBase.position.set(-0.35, 0.24, 0.55);
   craneBase.castShadow = true;
   pierGroup.add(craneBase);
 
   const craneTurret = new THREE.Group();
-  craneTurret.position.set(-0.35, 0.42, 0.55);
+  craneTurret.position.set(-0.35, 0.36, 0.55);
   pierGroup.add(craneTurret);
 
-  // Orange-Red Rotating Machinery Cab
-  const cabBody = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.52, 0.82), orangeRedMat);
-  cabBody.position.set(0, 0.26, -0.08);
+  const cabBody = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.46, 0.76), orangeRedMat);
+  cabBody.position.set(0, 0.23, -0.06);
   cabBody.castShadow = true;
   craneTurret.add(cabBody);
 
-  // Angled Open-Lattice Truss Boom (4 corner chords + cross bracing rungs)
   const boomGroup = new THREE.Group();
-  boomGroup.position.set(0, 0.42, 0.18);
-  boomGroup.rotation.x = 0.34; // Tilted forward over the water
+  boomGroup.position.set(0, 0.38, 0.16);
+  boomGroup.rotation.x = 0.32;
   craneTurret.add(boomGroup);
 
-  const boomLength = 5.4;
+  const boomLength = 5.1;
   const chordOffsets = [
-    [-0.14, -0.14],
-    [0.14, -0.14],
-    [0.14, 0.14],
-    [-0.14, 0.14],
+    [-0.12, -0.12],
+    [0.12, -0.12],
+    [0.12, 0.12],
+    [-0.12, 0.12],
   ];
 
   chordOffsets.forEach(([cx, cz]) => {
-    // Lower red section
     const lowChord = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.018, 0.024, boomLength * 0.35, 6),
+      new THREE.CylinderGeometry(0.016, 0.022, boomLength * 0.35, 6),
       orangeRedMat
     );
     lowChord.position.set(cx, boomLength * 0.175, cz);
     lowChord.castShadow = true;
     boomGroup.add(lowChord);
 
-    // Upper white lattice section
     const highChord = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.014, 0.018, boomLength * 0.65, 6),
+      new THREE.CylinderGeometry(0.012, 0.016, boomLength * 0.65, 6),
       whiteTrussMat
     );
-    highChord.position.set(cx * 0.85, boomLength * 0.675, cz * 0.85);
+    highChord.position.set(cx * 0.82, boomLength * 0.675, cz * 0.82);
     highChord.castShadow = true;
     boomGroup.add(highChord);
   });
 
-  // Lattice cross-rungs along the boom
   for (let r = 1; r <= 14; r++) {
     const ry = (r / 14) * boomLength;
     const mat = r <= 5 ? orangeRedMat : whiteTrussMat;
-    const rung = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.02, 0.28), mat);
+    const rung = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.018, 0.24), mat);
     rung.position.set(0, ry, 0);
     boomGroup.add(rung);
   }
 
-  // Crane Hoist Trolley at tip of angled boom (y = cos(0.34)*5.4 = 5.09, z = 0.18 + sin(0.34)*5.4 = 1.98)
   const craneTrolley = new THREE.Group();
-  craneTrolley.position.set(0, 5.15, 1.98);
+  craneTrolley.position.set(0, 4.9, 1.82);
   craneTurret.add(craneTrolley);
 
-  const cableGeo = new THREE.CylinderGeometry(0.014, 0.014, 1.0, 6);
+  const cableGeo = new THREE.CylinderGeometry(0.012, 0.012, 1.0, 6);
   cableGeo.translate(0, -0.5, 0);
   const craneCable = new THREE.Mesh(cableGeo, darkPilingMat);
-  craneCable.scale.y = 1.65;
+  craneCable.scale.y = 1.55;
   craneTrolley.add(craneCable);
 
   const craneSpreader = new THREE.Group();
-  craneSpreader.position.set(0, -1.65, 0);
+  craneSpreader.position.set(0, -1.55, 0);
   craneTrolley.add(craneSpreader);
 
-  const hookBlock = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.22, 0.18), yellowMat);
+  const hookBlock = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.18, 0.16), yellowMat);
   craneSpreader.add(hookBlock);
 
   return {
@@ -959,7 +925,7 @@ function buildPalmTrees(root: THREE.Group): THREE.Group[] {
 
   const trunkMat = new THREE.MeshStandardMaterial({ color: '#785f47', roughness: 0.9 });
   const leafMat = new THREE.MeshStandardMaterial({
-    color: '#4d7c3f',
+    color: '#558b44',
     roughness: 0.68,
     side: THREE.DoubleSide,
   });
@@ -974,9 +940,9 @@ function buildPalmTrees(root: THREE.Group): THREE.Group[] {
     treeGroup.position.set(px, py, pz);
     root.add(treeGroup);
 
-    const height = 0.95 + (idx % 3) * 0.18;
-    const tilt = (idx % 2 === 0 ? 1 : -1) * 0.11;
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.055, height, 7), trunkMat);
+    const height = 0.88 + (idx % 3) * 0.16;
+    const tilt = (idx % 2 === 0 ? 1 : -1) * 0.1;
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.05, height, 7), trunkMat);
     trunk.position.y = height / 2;
     trunk.rotation.z = tilt;
     trunk.castShadow = true;
@@ -994,9 +960,8 @@ function buildPalmTrees(root: THREE.Group): THREE.Group[] {
       frondGroup.rotation.y = angle;
       crown.add(frondGroup);
 
-      // Arched palm frond blade
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.015, 0.52), leafMat);
-      blade.position.set(0, -0.04, 0.25);
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.014, 0.46), leafMat);
+      blade.position.set(0, -0.04, 0.22);
       blade.rotation.x = 0.36;
       blade.castShadow = true;
       frondGroup.add(blade);
@@ -1012,8 +977,8 @@ function buildSeagulls(root: THREE.Group): AnimatedIslandHandles['seagulls'] {
 
   for (let i = 0; i < 6; i++) {
     const group = new THREE.Group();
-    const wingGeo = new THREE.BoxGeometry(0.2, 0.014, 0.06);
-    wingGeo.translate(0.1, 0, 0);
+    const wingGeo = new THREE.BoxGeometry(0.18, 0.012, 0.055);
+    wingGeo.translate(0.09, 0, 0);
     const wingL = new THREE.Mesh(wingGeo, gullMat);
     const wingR = new THREE.Mesh(wingGeo, gullMat);
     wingR.scale.x = -1;
@@ -1026,7 +991,7 @@ function buildSeagulls(root: THREE.Group): AnimatedIslandHandles['seagulls'] {
       wingR,
       cx: -1.0 + (i - 2.5) * 2.2,
       cz: -0.5 + (i % 2) * 2.4,
-      y: 3.6 + (i % 3) * 0.55,
+      y: 3.4 + (i % 3) * 0.5,
       rx: 2.6 + (i % 3) * 0.8,
       rz: 1.9 + (i % 2) * 0.7,
       speed: 0.52 + i * 0.07,
@@ -1044,49 +1009,45 @@ function buildUnderwaterEcosystem(root: THREE.Group): {
   const kelpStrands: THREE.Mesh[] = [];
   const swimmers: AnimatedIslandHandles['swimmers'] = [];
 
-  const rockColors = ['#476359', '#3b5249', '#526e63', '#64748b'];
+  const rockColors = ['#4d7c6f', '#3d695d', '#5c8c7e', '#64827a'];
   const coralColors = ['#e06d53', '#eab308', '#a855f7', '#ec4899', '#2dd4bf'];
   const kelpMat = new THREE.MeshStandardMaterial({ color: '#1f6f54', roughness: 0.75 });
 
-  // Scatter 95 reef boulders, coral heads, and kelp stalks across the entire underwater lagoon (matching crop_top_island.png!)
-  for (let i = 0; i < 95; i++) {
-    // Halton/golden-ratio quasi-random distribution across [-10.2, 10.2]
-    const u = ((i * 0.6180339887) % 1) * 20.4 - 10.2;
-    const v = ((i * 0.3819660112) % 1) * 20.4 - 10.2;
+  // Scatter 145 reef rocks, corals, and kelp organically across the entire 2D seabed using uncorrelated primes!
+  for (let i = 1; i <= 145; i++) {
+    const u = fractHash(i * 127.1 + 19.7) * 20.4 - 10.2;
+    const v = fractHash(i * 311.7 + 73.3) * 20.4 - 10.2;
     const bedY = evaluateSeabedHeight(u, v);
 
-    if (bedY < WATER_LEVEL - 0.25) {
-      if (i % 4 === 0) {
-        // Reef Coral Dome
+    if (bedY < WATER_LEVEL - 0.22) {
+      if (i % 5 === 0) {
         const cMat = new THREE.MeshStandardMaterial({
           color: coralColors[i % coralColors.length],
           roughness: 0.68,
         });
-        const r = 0.14 + (i % 4) * 0.055;
+        const r = 0.11 + (i % 4) * 0.045;
         const coral = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 1), cMat);
-        coral.position.set(u, bedY + r * 0.45, v);
-        coral.scale.y = 0.65;
+        coral.position.set(u, bedY + r * 0.4, v);
+        coral.scale.y = 0.62;
         coral.castShadow = true;
         coral.receiveShadow = true;
         root.add(coral);
-      } else if (i % 4 === 1 || i % 4 === 2) {
-        // Reef Rock / Patch
+      } else if (i % 5 !== 4) {
         const rMat = new THREE.MeshStandardMaterial({
           color: rockColors[i % rockColors.length],
           roughness: 0.9,
         });
-        const r = 0.16 + (i % 5) * 0.065;
+        const r = 0.12 + (i % 5) * 0.055;
         const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), rMat);
-        rock.position.set(u, bedY + r * 0.35, v);
-        rock.scale.set(1.2, 0.55, 1.0);
+        rock.position.set(u, bedY + r * 0.3, v);
+        rock.scale.set(1.25, 0.48, 1.0);
         rock.rotation.y = i * 1.1;
         rock.castShadow = true;
         rock.receiveShadow = true;
         root.add(rock);
       } else {
-        // Swaying Kelp Stalk
-        const kh = Math.min(1.15, (WATER_LEVEL - bedY) * 0.58);
-        const kGeo = new THREE.CylinderGeometry(0.016, 0.035, kh, 5, 3);
+        const kh = Math.min(0.85, (WATER_LEVEL - bedY) * 0.52);
+        const kGeo = new THREE.CylinderGeometry(0.014, 0.028, kh, 5, 3);
         kGeo.translate(0, kh / 2, 0);
         const kelp = new THREE.Mesh(kGeo, kelpMat);
         kelp.position.set(u, bedY, v);
@@ -1096,41 +1057,38 @@ function buildUnderwaterEcosystem(root: THREE.Group): {
     }
   }
 
-  // Marine Swimmers inside the translucent jelly volume (Sharks, Manta Ray, School of Fish)
   const sharkMat = new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.4 });
   const fishColors = ['#f97316', '#facc15', '#38bdf8', '#fb7185'];
 
-  // 2 Reef Sharks cruising the central lagoon
   for (let s = 0; s < 2; s++) {
     const sharkGroup = new THREE.Group();
-    const sharkBody = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.95, 10), sharkMat);
+    const sharkBody = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.82, 10), sharkMat);
     sharkBody.rotation.x = Math.PI / 2;
     sharkBody.castShadow = true;
-    const dorsalFin = new THREE.Mesh(new THREE.ConeGeometry(0.065, 0.22, 4), sharkMat);
-    dorsalFin.position.set(0, 0.12, -0.05);
+    const dorsalFin = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.18, 4), sharkMat);
+    dorsalFin.position.set(0, 0.1, -0.04);
     sharkGroup.add(sharkBody, dorsalFin);
     root.add(sharkGroup);
 
     swimmers.push({
       mesh: sharkGroup,
-      centerX: -1.5 + s * 3.5,
-      centerZ: 2.8 + s * 2.2,
-      y: 0.45 - s * 0.35,
-      radiusX: 2.8,
-      radiusZ: 2.1,
+      centerX: -1.8 + s * 3.2,
+      centerZ: 2.6 + s * 2.0,
+      y: 0.68 - s * 0.22,
+      radiusX: 2.6,
+      radiusZ: 1.9,
       speed: 0.45 + s * 0.08,
       phase: s * 2.5,
     });
   }
 
-  // 10 Tropical Reef Fish
-  for (let f = 0; f < 10; f++) {
+  for (let f = 0; f < 12; f++) {
     const fishGroup = new THREE.Group();
     const fMat = new THREE.MeshStandardMaterial({
       color: fishColors[f % fishColors.length],
       roughness: 0.35,
     });
-    const body = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.26, 8), fMat);
+    const body = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.22, 8), fMat);
     body.rotation.x = Math.PI / 2;
     body.castShadow = true;
     fishGroup.add(body);
@@ -1138,9 +1096,9 @@ function buildUnderwaterEcosystem(root: THREE.Group): {
 
     swimmers.push({
       mesh: fishGroup,
-      centerX: -3.2 + (f % 4) * 2.2,
-      centerZ: 1.8 + (f % 3) * 2.1,
-      y: 0.65 - (f % 3) * 0.32,
+      centerX: -3.2 + (f % 4) * 2.1,
+      centerZ: 1.6 + (f % 3) * 2.0,
+      y: 0.82 - (f % 3) * 0.22,
       radiusX: 1.4 + (f % 3) * 0.45,
       radiusZ: 1.2 + (f % 2) * 0.5,
       speed: 0.72 + (f % 4) * 0.12,
