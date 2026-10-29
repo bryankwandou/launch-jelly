@@ -192,34 +192,35 @@ export function buildIslandAndSeabed(
       '#include <dithering_fragment>',
       `float submergence = ${WATER_LEVEL.toFixed(2)} - vSeabedWorldPos.y;
       if (submergence > 0.0) {
-        float depthNorm = clamp(submergence / 2.85, 0.0, 1.0);
-        float shoreBlend = smoothstep(0.0, 0.18, submergence);
+        float depthNorm = clamp(submergence / 2.65, 0.0, 1.0);
+        float shoreBlend = smoothstep(0.0, 0.22, submergence);
 
-        // Saturated Beer-Lambert jelly absorption over coral sand (stays vibrant through ACES Filmic tone mapping)
-        vec3 richShallow = pow(clamp(uShallowColor, 0.0, 1.0), vec3(1.38)) * 0.76;
-        vec3 richDeep = pow(clamp(uDeepColor, 0.0, 1.0), vec3(1.28)) * 0.68;
-        vec3 jellyBedTint = mix(richShallow, richDeep, pow(depthNorm, 0.68));
+        // Direct post-tonemap sRGB lagoon tint (adapts to Lime, Curacao, and Blackcurrant)
+        vec3 shallowLagoon = mix(vec3(0.58, 0.95, 0.80), uShallowColor, 0.65);
+        vec3 deepLagoon = mix(vec3(0.18, 0.78, 0.58), uDeepColor, 0.75);
+        vec3 lagoonColor = mix(shallowLagoon, deepLagoon, pow(depthNorm, 0.68));
 
-        // Preserve directional shadows cast by Drone Ship, Tugboat, Fairing Boat, and Sharks
-        float luma = dot(outgoingLight, vec3(0.299, 0.587, 0.114));
-        float shadowPresence = clamp(luma / 0.72, 0.25, 1.05);
+        // Preserve Three.js directional shadows from Drone Ship, Tugboat, Fairing Boat, and Sharks
+        float luma = dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114));
+        float shadowFactor = smoothstep(0.42, 0.88, luma);
+        float shadeMult = 0.52 + 0.50 * shadowFactor;
 
         vec3 underwaterSand = mix(
-          outgoingLight,
-          jellyBedTint * (0.42 + 0.62 * shadowPresence),
+          gl_FragColor.rgb,
+          lagoonColor * shadeMult,
           shoreBlend * (0.82 + depthNorm * 0.14)
         );
 
-        // Organic dappled sunlight caustics on the sloped lagoon sand
+        // Soft organic dappled sunlight caustics on the sloped lagoon sand
         float dappleA = softCausticPattern(vSeabedWorldPos.xz * 0.82, uTime);
         float dappleB = softCausticPattern(vSeabedWorldPos.xz * 1.38 + vec2(3.7, -2.1), uTime * 0.85);
         float causticGlow = dappleA * 0.62 + dappleB * 0.38;
-        underwaterSand += uCausticColor * causticGlow * shoreBlend * (1.0 - depthNorm * 0.32) * 0.18 * shadowPresence;
+        underwaterSand += uCausticColor * causticGlow * shoreBlend * (1.0 - depthNorm * 0.30) * 0.16 * (0.35 + 0.65 * shadowFactor);
 
         if (uStorm > 0.01) {
-          underwaterSand *= mix(vec3(1.0), vec3(0.58, 0.68, 0.78), uStorm * 0.5);
+          underwaterSand *= mix(vec3(1.0), vec3(0.55, 0.65, 0.75), uStorm * 0.55);
         }
-        outgoingLight = underwaterSand;
+        gl_FragColor.rgb = underwaterSand;
       }
       #include <dithering_fragment>`
     );
