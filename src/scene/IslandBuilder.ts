@@ -175,16 +175,33 @@ export function buildIslandAndSeabed(
       uniform vec3 uCausticColor;
       varying vec3 vSeabedWorldPos;
 
-      float softCausticPattern(vec2 p, float t) {
-        vec2 w = p + vec2(
-          sin(p.y * 0.65 + t * 1.25) * 0.36,
-          cos(p.x * 0.60 - t * 1.10) * 0.36
-        );
-        float c1 = sin(w.x * 1.55 + sin(w.y * 1.35 + t * 1.3));
-        float c2 = cos(w.y * 1.65 - cos(w.x * 1.45 - t * 1.15));
-        float c3 = sin((w.x - w.y) * 1.25 + t * 0.95);
-        float net = abs(c1 + c2 + c3) / 3.0;
-        return pow(clamp(1.0 - net * 1.45, 0.0, 1.0), 2.2);
+      vec2 hash2D(vec2 p) {
+        p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+        return fract(sin(p) * 43758.5453);
+      }
+
+      float voronoiCellCaustic(vec2 p, float t) {
+        vec2 n = floor(p);
+        vec2 f = fract(p);
+        float md = 8.0;
+        float md2 = 8.0;
+        for (int j = -1; j <= 1; j++) {
+          for (int i = -1; i <= 1; i++) {
+            vec2 g = vec2(float(i), float(j));
+            vec2 o = hash2D(n + g);
+            o = 0.5 + 0.42 * sin(t * 1.45 + 6.2831 * o);
+            vec2 r = g + o - f;
+            float d = dot(r, r);
+            if (d < md) {
+              md2 = md;
+              md = d;
+            } else if (d < md2) {
+              md2 = d;
+            }
+          }
+        }
+        float edge = sqrt(md2) - sqrt(md);
+        return smoothstep(0.22, 0.0, edge);
       }`
     );
 
@@ -196,8 +213,8 @@ export function buildIslandAndSeabed(
         float shoreBlend = smoothstep(0.0, 0.22, submergence);
 
         // Direct post-tonemap sRGB lagoon tint (adapts to Lime, Curacao, and Blackcurrant)
-        vec3 shallowLagoon = mix(vec3(0.58, 0.95, 0.80), uShallowColor, 0.65);
-        vec3 deepLagoon = mix(vec3(0.18, 0.78, 0.58), uDeepColor, 0.75);
+        vec3 shallowLagoon = mix(vec3(0.56, 0.94, 0.79), uShallowColor, 0.65);
+        vec3 deepLagoon = mix(vec3(0.18, 0.76, 0.57), uDeepColor, 0.75);
         vec3 lagoonColor = mix(shallowLagoon, deepLagoon, pow(depthNorm, 0.68));
 
         // Preserve Three.js directional shadows from Drone Ship, Tugboat, Fairing Boat, and Sharks
@@ -211,11 +228,12 @@ export function buildIslandAndSeabed(
           shoreBlend * (0.82 + depthNorm * 0.14)
         );
 
-        // Soft organic dappled sunlight caustics on the sloped lagoon sand
-        float dappleA = softCausticPattern(vSeabedWorldPos.xz * 0.82, uTime);
-        float dappleB = softCausticPattern(vSeabedWorldPos.xz * 1.38 + vec2(3.7, -2.1), uTime * 0.85);
-        float causticGlow = dappleA * 0.62 + dappleB * 0.38;
-        underwaterSand += uCausticColor * causticGlow * shoreBlend * (1.0 - depthNorm * 0.30) * 0.16 * (0.35 + 0.65 * shadowFactor);
+        // Delicate cellular sunlit Voronoi caustics on the sloped lagoon sand (no diagonal stripes)
+        vec2 cUv = vSeabedWorldPos.xz + vec2(sin(vSeabedWorldPos.z * 0.6 + uTime) * 0.18, cos(vSeabedWorldPos.x * 0.6 - uTime) * 0.18);
+        float cellA = voronoiCellCaustic(cUv * 1.15, uTime);
+        float cellB = voronoiCellCaustic(cUv * 1.85 + vec2(2.7, -1.9), uTime * 0.85);
+        float causticGlow = cellA * 0.60 + cellB * 0.40;
+        underwaterSand += uCausticColor * causticGlow * shoreBlend * (1.0 - depthNorm * 0.32) * 0.14 * (0.28 + 0.72 * shadowFactor);
 
         if (uStorm > 0.01) {
           underwaterSand *= mix(vec3(1.0), vec3(0.55, 0.65, 0.75), uStorm * 0.55);
@@ -637,13 +655,25 @@ export function buildIslandAndSeabed(
     for (let s = 0; s < segCount; s++) {
       const rTop = Math.max(0.015, 0.065 - s * 0.0048);
       const rBot = Math.max(0.019, 0.070 - s * 0.0048);
-      const cyl = new THREE.Mesh(
-        new THREE.CylinderGeometry(rTop, rBot, segH, 8),
-        s % 2 === 0 ? whiteMat : redMat
-      );
+      const sMat = s % 2 === 0 ? whiteMat : redMat;
+      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBot, segH, 8), sMat);
       cyl.position.y = 0.72 + s * segH + segH / 2;
       cyl.castShadow = true;
       mast.add(cyl);
+
+      // Open-lattice corner truss cage around lower/mid sections (combining Opus & Astra detail)
+      if (s < 7) {
+        const cageW = (rBot + 0.045) * 1.45;
+        const cage = new THREE.Mesh(
+          new THREE.BoxGeometry(cageW, segH, cageW),
+          new THREE.MeshStandardMaterial({
+            color: s % 2 === 0 ? 0xe2e8f0 : SCENE_PALETTE.towerRed,
+            wireframe: true,
+          })
+        );
+        cage.position.y = 0.72 + s * segH + segH / 2;
+        mast.add(cage);
+      }
     }
 
     const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.015, 0.62, 6), whiteMat);
@@ -716,7 +746,7 @@ export function buildIslandAndSeabed(
   wtGroup.add(sphereTank);
   padGroup.add(wtGroup);
 
-  // White spherical LOX tank + horizontal cylindrical RP-1 tanks
+  // White spherical LOX tank + horizontal cylindrical RP-1 tanks + insulated blue/white cryogenic pipelines
   const cryoMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.32, metalness: 0.15 });
   const loxSphere = new THREE.Mesh(new THREE.SphereGeometry(0.58, 20, 16), cryoMat);
   loxSphere.position.set(3.05, 0.68, -0.35);
@@ -731,6 +761,17 @@ export function buildIslandAndSeabed(
     hTank.castShadow = true;
     padGroup.add(hTank);
   });
+
+  const bluePipeMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.4, metalness: 0.35 });
+  const loxPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 2.2, 8), bluePipeMat);
+  loxPipe.rotation.z = Math.PI / 2;
+  loxPipe.position.set(1.85, 0.24, -0.35);
+  padGroup.add(loxPipe);
+
+  const delugePipe = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 1.25, 8), bluePipeMat);
+  delugePipe.rotation.z = Math.PI / 2;
+  delugePipe.position.set(-0.68, 0.24, -0.52);
+  padGroup.add(delugePipe);
 
   // 6. LANDING ZONE 1 (LZ-1), FIRE TRUCK, RADAR, WINDSOCK, & SCOREBOARD
   const lzGroup = new THREE.Group();
@@ -896,6 +937,25 @@ export function buildIslandAndSeabed(
     sbGroup.add(leg);
   }
 
+  // Spectator bleacher grandstand with miniature spectators behind the scoreboard (from reference video)
+  const bleacherMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.7 });
+  for (let step = 0; step < 3; step++) {
+    const bench = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.06, 0.14), bleacherMat);
+    bench.position.set(0, 0.06 + step * 0.075, -0.22 - step * 0.14);
+    bench.castShadow = true;
+    sbGroup.add(bench);
+
+    const specColors = [0xef4444, 0x3b82f6, 0xfacc15, 0x10b981, 0xf97316];
+    for (let p = -2; p <= 2; p++) {
+      const person = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.024, 0.05, 4, 6),
+        new THREE.MeshStandardMaterial({ color: specColors[(step + p + 5) % specColors.length], roughness: 0.5 })
+      );
+      person.position.set(p * 0.18, 0.12 + step * 0.075, -0.22 - step * 0.14);
+      sbGroup.add(person);
+    }
+  }
+
   // 7. HARBOUR PIER, PORT WAREHOUSE, STRADDLE GANTRIES, & SLENDER LATTICE CRANE
   const pierGroup = new THREE.Group();
   pierGroup.position.set(5.4, 0, -1.9);
@@ -906,6 +966,58 @@ export function buildIslandAndSeabed(
   quayDeck.receiveShadow = true;
   quayDeck.castShadow = true;
   pierGroup.add(quayDeck);
+
+  // Yellow & black safety edge curbing & mooring bollards along the quay face
+  const hazardYellowMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.5 });
+  const hazardBlackMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
+  for (let s = -12; s < 12; s++) {
+    const curb = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.03, 0.08),
+      s % 2 === 0 ? hazardYellowMat : hazardBlackMat
+    );
+    curb.position.set(s * 0.24 + 0.12, 1.925, 1.05);
+    pierGroup.add(curb);
+  }
+  for (let b = -3; b <= 3; b++) {
+    const bollard = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 0.12, 8), hazardBlackMat);
+    bollard.position.set(b * 0.85, 1.96, 0.98);
+    pierGroup.add(bollard);
+  }
+
+  // Two orange circular booster-stage recovery rings on the left of the pier (matching reference video)
+  const standOrangeMat = new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.45, metalness: 0.25 });
+  [-2.65, -1.35].forEach((sx) => {
+    const ringStand = new THREE.Group();
+    ringStand.position.set(sx, 1.92, -0.35);
+    const torus = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.032, 8, 20), standOrangeMat);
+    torus.rotation.x = Math.PI / 2;
+    torus.position.y = 0.22;
+    torus.castShadow = true;
+    ringStand.add(torus);
+    for (let l = 0; l < 4; l++) {
+      const a = (l * Math.PI) / 2 + Math.PI / 4;
+      const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.024, 0.24, 6), standOrangeMat);
+      strut.position.set(Math.cos(a) * 0.26, 0.11, Math.sin(a) * 0.26);
+      ringStand.add(strut);
+    }
+    pierGroup.add(ringStand);
+  });
+
+  // Intermodal shipping containers stacked near the port warehouse
+  const containerSpecs: { x: number; y: number; z: number; color: number }[] = [
+    { x: -0.95, y: 2.06, z: -0.72, color: 0x2563eb },
+    { x: -0.95, y: 2.32, z: -0.72, color: 0xdc2626 },
+    { x: 2.55, y: 2.06, z: -0.62, color: 0x0d9488 },
+  ];
+  containerSpecs.forEach((c) => {
+    const cMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.62, 0.26, 0.28),
+      new THREE.MeshStandardMaterial({ color: c.color, roughness: 0.55 })
+    );
+    cMesh.position.set(c.x, c.y, c.z);
+    cMesh.castShadow = true;
+    pierGroup.add(cMesh);
+  });
 
   const quaySubwall = new THREE.Mesh(
     new THREE.BoxGeometry(6.0, 1.85, 2.0),
@@ -1204,25 +1316,58 @@ export function buildIslandAndSeabed(
     kelpStrands.push(stalk);
   }
 
-  // 4 Swimming Reef Sharks casting crisp shadows onto the sunlit mint seabed
+  // Hollow yellow/orange tube-sponge clusters & 5-pointed sea stars on the seabed (matching reference video)
+  const spongeColors = [0xd97706, 0xeab308, 0xe06d53, 0x10b981];
+  for (let sc = 0; sc < 18; sc++) {
+    const sx = -9.4 + fractHash(sc * 4.19 + 0.33) * 18.8;
+    const sz = 0.6 + fractHash(sc * 6.71 + 0.77) * 9.6;
+    const sy = evaluateSeabedHeight(sx, sz);
+    if (sy > WATER_LEVEL - 0.45) continue;
+
+    const cluster = new THREE.Group();
+    cluster.position.set(sx, sy, sz);
+    const sMat = new THREE.MeshStandardMaterial({
+      color: spongeColors[sc % spongeColors.length],
+      roughness: 0.75,
+    });
+    for (let t = 0; t < 4; t++) {
+      const th = 0.14 + (t % 3) * 0.06;
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.048, th, 8), sMat);
+      const ang = (t / 4) * Math.PI * 2;
+      tube.position.set(Math.cos(ang) * 0.055, th / 2, Math.sin(ang) * 0.055);
+      tube.rotation.z = Math.cos(ang) * 0.12;
+      cluster.add(tube);
+    }
+    root.add(cluster);
+  }
+
+  // 4 Swimming Reef Sharks with dorsal, pectoral, and caudal fins casting crisp shadows onto the sunlit mint seabed
   const sharkMat = new THREE.MeshStandardMaterial({ color: 0x335c53, roughness: 0.45 });
   for (let s = 0; s < 4; s++) {
     const sharkGroup = new THREE.Group();
     const body = new THREE.Mesh(
-      new THREE.ConeGeometry(0.105, 0.64, 10).rotateX(Math.PI / 2),
+      new THREE.ConeGeometry(0.115, 0.72, 10).rotateX(Math.PI / 2),
       sharkMat
     );
     body.scale.set(1.0, 0.65, 1.0);
     body.castShadow = true;
     sharkGroup.add(body);
 
-    const dorsal = new THREE.Mesh(new THREE.ConeGeometry(0.048, 0.15, 4), sharkMat);
-    dorsal.position.set(0, 0.075, -0.05);
+    const dorsal = new THREE.Mesh(new THREE.ConeGeometry(0.052, 0.17, 4), sharkMat);
+    dorsal.position.set(0, 0.08, -0.05);
     dorsal.rotation.x = -0.35;
     sharkGroup.add(dorsal);
 
-    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.02, 0.11), sharkMat);
-    tail.position.set(0, 0, -0.32);
+    [-1, 1].forEach((side) => {
+      const pec = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.015, 0.08), sharkMat);
+      pec.position.set(side * 0.10, -0.02, 0.06);
+      pec.rotation.y = side * -0.35;
+      pec.rotation.z = side * -0.18;
+      sharkGroup.add(pec);
+    });
+
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.12), sharkMat);
+    tail.position.set(0, 0, -0.35);
     sharkGroup.add(tail);
 
     const cx = -5.5 + s * 3.2;

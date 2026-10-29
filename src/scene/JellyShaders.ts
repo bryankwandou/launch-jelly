@@ -229,18 +229,6 @@ varying vec3 vWorldNormal;
 varying float vSeabedY;
 varying vec2 vUv;
 
-float waveRippleCaustic(vec2 p, float t) {
-  vec2 w = p + vec2(
-    sin(p.y * 0.72 + t * 1.45) * 0.38,
-    cos(p.x * 0.68 - t * 1.25) * 0.38
-  );
-  float a = sin(w.x * 1.85 + sin(w.y * 1.55 + t * 1.6));
-  float b = cos(w.y * 1.95 - cos(w.x * 1.65 - t * 1.35));
-  float c = sin((w.x - w.y) * 1.45 + t * 1.15);
-  float net = abs(a + b + c) / 3.0;
-  return pow(clamp(1.0 - net * 1.65, 0.0, 1.0), 2.6);
-}
-
 void main() {
   float waterDepth = vWorldPos.y - vSeabedY;
   if (waterDepth < -0.015) {
@@ -251,67 +239,59 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorldPos);
   vec3 L = normalize(uSunDir);
 
-  // Glossy multi-frequency wave facets on the top gel surface
+  // Fine-scale glossy capillary wave normals (no wide diagonal stripes)
   float nX =
-    cos(p.x * 1.55 + p.y * 1.05 + uTime * 2.2) * 0.026 +
-    sin(p.x * 2.9 - p.y * 2.3 - uTime * 1.7) * 0.014;
+    cos(p.x * 2.4 + p.y * 1.6 + uTime * 2.4) * 0.022 +
+    sin(p.x * 4.2 - p.y * 3.5 - uTime * 1.9) * 0.012;
   float nZ =
-    sin(p.y * 1.65 - p.x * 0.95 - uTime * 1.9) * 0.026 +
-    cos(p.x * 2.5 + p.y * 2.7 + uTime * 2.4) * 0.014;
+    sin(p.y * 2.6 - p.x * 1.5 - uTime * 2.1) * 0.022 +
+    cos(p.x * 3.8 + p.y * 4.1 + uTime * 2.6) * 0.012;
   vec3 N = normalize(vWorldNormal + vec3(nX, 0.0, nZ));
   vec3 H = normalize(L + V);
 
   float NdotV = max(dot(N, V), 0.001);
-  float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 3.8);
+  float fresnel = 0.03 + 0.97 * pow(1.0 - NdotV, 4.0);
 
   float depthNorm = clamp(waterDepth / 2.75, 0.0, 1.0);
-  // Deeply saturated jelly body tint so ACES tone mapping preserves vibrant Lime / Curacao / Blackcurrant hues
-  vec3 richShallow = pow(clamp(uShallowColor, 0.0, 1.0), vec3(1.28)) * 0.86;
-  vec3 richDeep = pow(clamp(uDeepColor, 0.0, 1.0), vec3(1.22)) * 0.78;
+  vec3 richShallow = pow(clamp(uShallowColor, 0.0, 1.0), vec3(1.25)) * 0.88;
+  vec3 richDeep = pow(clamp(uDeepColor, 0.0, 1.0), vec3(1.20)) * 0.80;
   vec3 bodyColor = mix(richShallow, richDeep, pow(depthNorm, 0.72));
 
-  // Flowing organic wave-facet shimmer on the jelly surface (matching frame0, frame5, frame12)
-  float surfShimmer =
-    waveRippleCaustic(p * 0.78, uTime) * 0.62 +
-    waveRippleCaustic(p * 1.35 + vec2(4.1, -2.7), uTime * 0.85) * 0.38;
-  float shimmerMask = smoothstep(0.06, 0.45, waterDepth);
-
   // Studio sky reflection & crisp specular glints
-  vec3 skyReflect = mix(uShallowColor * 0.95, vec3(1.0), 0.65);
-  float specTight = pow(max(dot(N, H), 0.0), 160.0) * 0.92;
-  float specBroad = pow(max(dot(N, H), 0.0), 24.0) * 0.18;
+  vec3 skyReflect = mix(uShallowColor * 0.95, vec3(1.0), 0.68);
+  float specTight = pow(max(dot(N, H), 0.0), 210.0) * 0.95;
+  float specBroad = pow(max(dot(N, H), 0.0), 32.0) * 0.16;
 
   // Shoreline foam ribbon where jelly meets sand beach or harbour quay
-  float shoreFoam = smoothstep(0.24, 0.0, waterDepth) * (0.52 + 0.16 * sin(p.x * 2.4 + uTime * 3.0));
+  float shoreFoam = smoothstep(0.24, 0.0, waterDepth) * (0.50 + 0.16 * sin(p.x * 2.4 + uTime * 3.0));
 
-  // Parallel white wave crest lines rolling gently near the harbour/beach
+  // Parallel white wave crest lines rolling gently near the harbour/beach (matching reference video)
   float wavePhase = fract(p.y * 0.38 + uTime * 0.30 + sin(p.x * 0.18) * 0.10);
   float crestLine =
-    smoothstep(0.026, 0.0, abs(wavePhase - 0.5)) *
+    smoothstep(0.024, 0.0, abs(wavePhase - 0.5)) *
     smoothstep(0.25, 1.1, waterDepth) *
     smoothstep(6.2, -1.5, p.y) *
-    smoothstep(-1.5, 4.2, p.x) * 0.38;
+    smoothstep(-1.5, 4.2, p.x) * 0.42;
 
   // Crisp white refractive rim line around the cut edges of the jelly cube
   float edgeDist = 11.0 - max(abs(p.x), abs(p.y));
-  float rimLine = smoothstep(0.18, 0.0, edgeDist) * 0.85 + smoothstep(0.50, 0.0, edgeDist) * 0.18;
+  float rimLine = smoothstep(0.18, 0.0, edgeDist) * 0.88 + smoothstep(0.50, 0.0, edgeDist) * 0.18;
 
   // Rocket exhaust glow on the water during ignition/landing
   float rocketDist = length(vWorldPos - uRocketLightPos);
   vec3 rocketGlow = vec3(1.0, 0.58, 0.2) * (uRocketLightIntensity / (1.0 + rocketDist * rocketDist * 0.18));
 
-  vec3 finalColor = mix(bodyColor, skyReflect, fresnel * 0.38);
-  finalColor += uCausticColor * surfShimmer * shimmerMask * 0.22;
+  vec3 finalColor = mix(bodyColor, skyReflect, fresnel * 0.40);
   finalColor += uSpecularColor * (specTight + specBroad) + rocketGlow * 0.35;
-  finalColor = mix(finalColor, vec3(0.98, 1.0, 0.99), clamp(shoreFoam + crestLine + rimLine, 0.0, 0.92));
+  finalColor = mix(finalColor, vec3(0.98, 1.0, 0.99), clamp(shoreFoam + crestLine + rimLine, 0.0, 0.94));
 
   if (uStorm > 0.01) {
     finalColor = mix(finalColor, finalColor * vec3(0.55, 0.66, 0.78), uStorm * 0.5);
   }
 
   float alpha = clamp(
-    0.22 + depthNorm * 0.12 + fresnel * 0.22 + surfShimmer * 0.10 + shoreFoam * 0.32 + crestLine * 0.26 + rimLine * 0.56 + specTight * 0.38,
-    0.20,
+    0.15 + depthNorm * 0.09 + fresnel * 0.22 + shoreFoam * 0.32 + crestLine * 0.28 + rimLine * 0.58 + specTight * 0.40,
+    0.14,
     0.86
   );
   gl_FragColor = vec4(finalColor, alpha);

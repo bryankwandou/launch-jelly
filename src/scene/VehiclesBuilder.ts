@@ -343,7 +343,7 @@ export function buildAllVehicles(root: THREE.Group): VehiclesRig {
     droneShipGroup.add(bar);
   });
 
-  // 4 Corner Equipment Containers on ASDS Deck (exact detail from crop_top_island.png!)
+  // 4 Corner Equipment Containers & Submerged Azimuth Thruster Pods on ASDS (matching reference video)
   const equipMat = new THREE.MeshStandardMaterial({ color: '#e2e8f0', roughness: 0.5 });
   [
     [-1.08, -0.66],
@@ -355,6 +355,18 @@ export function buildAllVehicles(root: THREE.Group): VehiclesRig {
     box.position.set(cx, 0.28, cz);
     box.castShadow = true;
     droneShipGroup.add(box);
+
+    // Submerged azimuth thruster pod visible through the translucent jelly below the barge hull
+    const podStrut = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 0.28, 8), hullMat);
+    podStrut.position.set(cx * 0.82, -0.28, cz * 0.78);
+    droneShipGroup.add(podStrut);
+
+    const podShroud = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.075, 0.075, 0.18, 10).rotateZ(Math.PI / 2),
+      hullMat
+    );
+    podShroud.position.set(cx * 0.82, -0.40, cz * 0.78);
+    droneShipGroup.add(podShroud);
   });
 
   // 6. RED-AND-WHITE HARBOUR TUGBOAT (MATCHING CROP_TOP_ISLAND.PNG)
