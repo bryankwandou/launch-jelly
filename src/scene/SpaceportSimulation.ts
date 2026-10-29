@@ -23,8 +23,21 @@ import {
   evaluateJellySurface,
   evaluateSeabedHeight,
 } from './JellyShaders';
-import { AnimatedIslandHandles, buildIslandAndSeabed } from './IslandBuilder';
-import { VehiclesRig, buildAllVehicles } from './VehiclesBuilder';
+import {
+  AnimatedIslandHandles,
+  HANGAR_WORLD_X,
+  LZ_WORLD_X,
+  LZ_WORLD_Z,
+  PAD_WORLD_X,
+  PAD_WORLD_Z,
+  buildIslandAndSeabed,
+} from './IslandBuilder';
+import {
+  FAIRING_BASE_OFFSET,
+  STAGE1_TOP_OFFSET,
+  VehiclesRig,
+  buildAllVehicles,
+} from './VehiclesBuilder';
 import { SpaceportEffectsSystem } from './ParticleSystem';
 import { soundEngine } from '../audio/SoundEngine';
 
@@ -39,7 +52,7 @@ export class SpaceportSimulation {
   private vehicles: VehiclesRig;
   private effects: SpaceportEffectsSystem;
 
-  // Lights & Environment
+  // Lights & Studio Environment
   private ambientLight: THREE.HemisphereLight;
   private sunLight: THREE.DirectionalLight;
   private rimLight: THREE.DirectionalLight;
@@ -62,11 +75,11 @@ export class SpaceportSimulation {
   private targetTiltX = 0;
   private targetTiltZ = 0;
 
-  // Camera Spherical Orbit & Target Framing
-  private camSpherical = { theta: 0.72, phi: 1.04, radius: 28.5 };
-  private camTargetSpherical = { theta: 0.72, phi: 1.04, radius: 28.5 };
-  private camLookAt = new THREE.Vector3(0, 0.8, 0);
-  private camTargetLookAt = new THREE.Vector3(0, 0.8, 0);
+  // Camera Spherical Orbit & Responsive Framing
+  private camSpherical = { theta: 0.28, phi: 1.08, radius: 39.0 };
+  private camTargetSpherical = { theta: 0.28, phi: 1.08, radius: 39.0 };
+  private camLookAt = new THREE.Vector3(0.8, 0.25, -0.4);
+  private camTargetLookAt = new THREE.Vector3(0.8, 0.25, -0.4);
 
   // Pointer Interaction State
   private raycaster = new THREE.Raycaster();
@@ -96,8 +109,8 @@ export class SpaceportSimulation {
 
   private landingTarget: LandingTarget = 'drone_ship';
   private flavour: JellyFlavourKey = 'lime';
-  private firmness = 65;
-  private waveDamping = 38;
+  private firmness = 50;
+  private waveDamping = 30;
   private windSpeed = 6;
   private storm = false;
   private paused = false;
@@ -115,14 +128,14 @@ export class SpaceportSimulation {
   private velocityMs = 0;
   private downrangeKm = 0;
   private throttlePct = 0;
-  private stage2Status = 'Mounted on stack';
-  private droneShipStatus = 'On station · ready to catch';
-  private fairingBoatStatus = 'In harbour · net ready';
+  private stage2Status = 'Count';
+  private droneShipStatus = 'On station';
+  private fairingBoatStatus = 'In harbour';
 
-  // Vessel World Coordinates
-  private droneShipPos = new THREE.Vector2(3.6, 5.2);
-  private tugBoatPos = new THREE.Vector2(2.4, 0.2);
-  private fairingBoatPos = new THREE.Vector2(6.8, -0.1);
+  // Vessel World Coordinates (matching crop_top_island.png)
+  private droneShipPos = new THREE.Vector2(4.2, 3.3);
+  private tugBoatPos = new THREE.Vector2(1.45, -1.45);
+  private fairingBoatPos = new THREE.Vector2(-0.35, -1.35);
 
   private onTelemetryCallback: (snap: TelemetrySnapshot) => void;
   private lastUiEmit = 0;
@@ -146,88 +159,108 @@ export class SpaceportSimulation {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.06;
+    this.renderer.toneMappingExposure = 1.08;
     container.appendChild(this.renderer.domElement);
 
     // 2. Scene & Camera
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(SCENE_PALETTE.dayBackground);
-    this.scene.fog = new THREE.FogExp2(SCENE_PALETTE.dayBackground, 0.0085);
+    this.scene.fog = new THREE.FogExp2(SCENE_PALETTE.dayBackground, 0.0065);
 
     this.camera = new THREE.PerspectiveCamera(
-      36,
+      32,
       container.clientWidth / container.clientHeight,
       0.5,
-      180
+      200
     );
 
-    // 3. Studio Lighting
-    this.ambientLight = new THREE.HemisphereLight('#ffffff', '#cbd5e1', 0.92);
+    // 3. Studio Lighting (Sun from Top-Left-Front so shadows cast cleanly to the Right-Back on the studio table and directly under the Drone Ship!)
+    this.ambientLight = new THREE.HemisphereLight('#ffffff', '#d6d3cb', 0.96);
     this.scene.add(this.ambientLight);
 
-    this.sunLight = new THREE.DirectionalLight('#fffbeb', 1.85);
-    this.sunLight.position.set(-16, 26, -14);
+    this.sunLight = new THREE.DirectionalLight('#fffdf8', 2.05);
+    this.sunLight.position.set(-14, 28, 12);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.width = 2048;
     this.sunLight.shadow.mapSize.height = 2048;
     this.sunLight.shadow.camera.near = 4;
-    this.sunLight.shadow.camera.far = 68;
-    const d = 17.5;
+    this.sunLight.shadow.camera.far = 72;
+    const d = 16.5;
     this.sunLight.shadow.camera.left = -d;
     this.sunLight.shadow.camera.right = d;
     this.sunLight.shadow.camera.top = d;
     this.sunLight.shadow.camera.bottom = -d;
-    this.sunLight.shadow.bias = -0.0005;
+    this.sunLight.shadow.bias = -0.0004;
     this.scene.add(this.sunLight);
 
-    this.rimLight = new THREE.DirectionalLight('#e0f2fe', 0.55);
-    this.rimLight.position.set(18, 12, 16);
+    this.rimLight = new THREE.DirectionalLight('#e0f2fe', 0.52);
+    this.rimLight.position.set(18, 14, -14);
     this.scene.add(this.rimLight);
 
     // 4. Studio Tabletop Floor & Refracted Jelly Caustic Shadow Patch
     this.floorMat = new THREE.MeshStandardMaterial({
       color: SCENE_PALETTE.dayFloor,
-      roughness: 0.92,
+      roughness: 0.9,
       metalness: 0.02,
     });
-    const floorGeo = new THREE.PlaneGeometry(160, 160);
+    const floorGeo = new THREE.PlaneGeometry(180, 180);
     floorGeo.rotateX(-Math.PI / 2);
     this.floorMesh = new THREE.Mesh(floorGeo, this.floorMat);
     this.floorMesh.position.y = BLOCK_BOTTOM_Y - 0.02;
     this.floorMesh.receiveShadow = true;
     this.scene.add(this.floorMesh);
 
-    // Translucent Colored Jelly Caustic Transmission Glow on the Tabletop Floor
     this.causticGlowMat = new THREE.MeshBasicMaterial({
       color: JELLY_FLAVOURS.lime.shallowHex,
       transparent: true,
-      opacity: 0.22,
+      opacity: 0.16,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-    const causticPatch = new THREE.Mesh(new THREE.PlaneGeometry(18, 18), this.causticGlowMat);
+    const causticPatch = new THREE.Mesh(new THREE.PlaneGeometry(16, 16), this.causticGlowMat);
     causticPatch.rotation.x = -Math.PI / 2;
-    causticPatch.position.set(5.2, BLOCK_BOTTOM_Y + 0.01, 5.2);
+    causticPatch.position.set(4.5, BLOCK_BOTTOM_Y + 0.01, -2.5);
     this.scene.add(causticPatch);
 
-    // 5. Build Diorama Group (Island + Seabed + Vehicles + Jelly Volume + Effects)
+    // 5. Build Diorama Group
     this.dioramaGroup = new THREE.Group();
     this.scene.add(this.dioramaGroup);
 
-    this.islandHandles = buildIslandAndSeabed(this.dioramaGroup);
+    this.islandHandles = buildIslandAndSeabed(
+      this.dioramaGroup,
+      this.currentShallowColor,
+      this.currentDeepColor,
+      this.currentCausticColor
+    );
     this.vehicles = buildAllVehicles(this.dioramaGroup);
     this.effects = new SpaceportEffectsSystem(this.dioramaGroup);
     this.buildJellyVolume();
 
-    // Initialize default state ("On the pad" ready to launch immediately, just like frame0 of the reference!)
+    // Responsive initial camera framing
+    this.setCameraPreset('overview');
+    this.camSpherical = { ...this.camTargetSpherical };
+    this.camLookAt.copy(this.camTargetLookAt);
+
+    // Initialize default state ("On the pad" ready for launch)
     this.setLandingTarget('drone_ship');
     this.positionStackOnPad();
-    this.updateDigitalScoreboard('T-00:10', '#10b981');
+    this.updateDigitalScoreboard('T-0:10', '#fbbf24');
 
-    // Bind Events
     this.bindEvents();
     this.emitTelemetry(true);
     this.animate();
+  }
+
+  private getResponsiveOverviewRadius(): number {
+    const aspect = this.container.clientWidth / Math.max(1, this.container.clientHeight);
+    // Ensure the full 22x22 block + right sidebar never collide on any window aspect ratio
+    if (aspect < 1.25) {
+      return 46.0;
+    }
+    if (aspect < 1.55) {
+      return 41.5;
+    }
+    return 38.0;
   }
 
   private buildJellyVolume(): void {
@@ -246,13 +279,12 @@ export class SpaceportSimulation {
       uDeepColor: { value: this.currentDeepColor },
       uCausticColor: { value: this.currentCausticColor },
       uSpecularColor: { value: this.currentSpecColor },
-      uSunDir: { value: new THREE.Vector3(-0.5, 0.8, -0.4).normalize() },
-      uRocketLightPos: { value: new THREE.Vector3(3.8, 3.0, -5.8) },
+      uSunDir: { value: new THREE.Vector3(-0.45, 0.82, 0.35).normalize() },
+      uRocketLightPos: { value: new THREE.Vector3(PAD_WORLD_X, 3.0, PAD_WORLD_Z) },
       uRocketLightIntensity: { value: 0.0 },
     };
 
-    // Top Wave Surface
-    const topGeo = new THREE.PlaneGeometry(BLOCK_HALF_SIZE * 2, BLOCK_HALF_SIZE * 2, 128, 128);
+    const topGeo = new THREE.PlaneGeometry(BLOCK_HALF_SIZE * 2, BLOCK_HALF_SIZE * 2, 160, 160);
     topGeo.rotateX(-Math.PI / 2);
     topGeo.translate(0, WATER_LEVEL, 0);
 
@@ -270,7 +302,6 @@ export class SpaceportSimulation {
     this.jellySurfaceMesh.renderOrder = 2;
     this.dioramaGroup.add(this.jellySurfaceMesh);
 
-    // 4 Vertical Cut-Block Jelly Side Walls
     this.jellyWallMat = new THREE.ShaderMaterial({
       vertexShader: JELLY_WALL_VERTEX,
       fragmentShader: JELLY_WALL_FRAGMENT,
@@ -280,8 +311,8 @@ export class SpaceportSimulation {
       side: THREE.DoubleSide,
     });
 
-    const wallHeight = WATER_LEVEL - -3.8;
-    const wallCenterY = (-3.8 + WATER_LEVEL) / 2;
+    const wallHeight = WATER_LEVEL - -3.2;
+    const wallCenterY = (-3.2 + WATER_LEVEL) / 2;
 
     const wallConfigs: { x: number; z: number; rotY: number }[] = [
       { x: 0, z: BLOCK_HALF_SIZE + 0.01, rotY: 0 },
@@ -291,7 +322,7 @@ export class SpaceportSimulation {
     ];
 
     wallConfigs.forEach((cfg) => {
-      const wGeo = new THREE.PlaneGeometry(BLOCK_HALF_SIZE * 2, wallHeight, 96, 24);
+      const wGeo = new THREE.PlaneGeometry(BLOCK_HALF_SIZE * 2, wallHeight, 120, 28);
       wGeo.rotateY(cfg.rotY);
       wGeo.translate(cfg.x, wallCenterY, cfg.z);
       const wMesh = new THREE.Mesh(wGeo, this.jellyWallMat);
@@ -311,8 +342,8 @@ export class SpaceportSimulation {
     if (this.ripples.length > MAX_RIPPLES) {
       this.ripples.pop();
     }
-    this.wobbleVelX += (Math.random() - 0.5) * strength * 2.4;
-    this.wobbleVelZ += (Math.random() - 0.5) * strength * 2.4;
+    this.wobbleVelX += (Math.random() - 0.5) * strength * 2.2;
+    this.wobbleVelZ += (Math.random() - 0.5) * strength * 2.2;
   }
 
   private updateDigitalScoreboard(text: string, hexColor: string): void {
@@ -320,26 +351,16 @@ export class SpaceportSimulation {
     const w = this.islandHandles.scoreboardCanvas.width;
     const h = this.islandHandles.scoreboardCanvas.height;
 
-    ctx.fillStyle = '#0f141c';
+    ctx.fillStyle = '#11141a';
     ctx.fillRect(0, 0, w, h);
 
-    // Subtle LED matrix grid background
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.lineWidth = 1;
-    for (let x = 0; x < w; x += 8) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
-    }
-
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = '#94a3b8';
     ctx.font = '600 14px "JetBrains Mono", monospace';
     ctx.textAlign = 'center';
     ctx.fillText(`LC-1 · ${this.boosterSerial}.${this.flightNumber}`, w / 2, 24);
 
     ctx.fillStyle = hexColor;
-    ctx.font = '700 40px "JetBrains Mono", monospace';
+    ctx.font = '700 42px "JetBrains Mono", monospace';
     ctx.fillText(text, w / 2, 74);
 
     this.islandHandles.scoreboardTexture.needsUpdate = true;
@@ -351,7 +372,7 @@ export class SpaceportSimulation {
 
   public getWeatherNoGoReason(): string | null {
     if (this.storm) return 'NO LAUNCH IN STORM';
-    if (this.windSpeed > 15) return `WIND ${this.windSpeed} M/S > 15 M/S LIMIT`;
+    if (this.windSpeed > 15) return `WIND ${this.windSpeed} M/S > 15 M/S`;
     return null;
   }
 
@@ -387,7 +408,6 @@ export class SpaceportSimulation {
       soundEngine.playCountdownBeep(10);
       this.emitTelemetry(true);
     } else if (this.phase === 'countdown') {
-      // Press again during the count to hold!
       this.phase = 'hold';
       this.updateDigitalScoreboard('HOLD', '#f59e0b');
       soundEngine.playCountdownBeep(5);
@@ -406,10 +426,10 @@ export class SpaceportSimulation {
   public setLandingTarget(target: LandingTarget): void {
     this.landingTarget = target;
     if (target === 'drone_ship') {
-      this.vehicles.droneShipRingMat.color.set('#10b981');
-      this.islandHandles.landingPadRingMat.color.set('#64748b');
+      this.vehicles.droneShipRingMat.color.set('#ffffff');
+      this.islandHandles.landingPadRingMat.color.set('#94a3b8');
     } else {
-      this.vehicles.droneShipRingMat.color.set('#64748b');
+      this.vehicles.droneShipRingMat.color.set('#94a3b8');
       this.islandHandles.landingPadRingMat.color.set('#10b981');
     }
     this.emitTelemetry(true);
@@ -417,7 +437,7 @@ export class SpaceportSimulation {
 
   public setFlavour(flavour: JellyFlavourKey): void {
     this.flavour = flavour;
-    this.exciteJellyImpulse(2.0, 2.5, 0.65);
+    this.exciteJellyImpulse(1.5, 2.5, 0.65);
     soundEngine.playWobble(0.55, this.firmness);
     this.emitTelemetry(true);
   }
@@ -456,7 +476,7 @@ export class SpaceportSimulation {
       this.phase = 'hold';
       this.updateDigitalScoreboard('STORM', '#ef4444');
     }
-    this.exciteJellyImpulse(0, 3.0, 1.1);
+    this.exciteJellyImpulse(0, 3.0, 1.0);
     this.emitTelemetry(true);
   }
 
@@ -483,17 +503,21 @@ export class SpaceportSimulation {
   public setCameraPreset(preset: CameraPreset): void {
     this.cameraPreset = preset;
     if (preset === 'overview') {
-      this.camTargetSpherical = { theta: 0.72, phi: 1.04, radius: 28.5 };
-      this.camTargetLookAt.set(0, 0.8, 0);
+      this.camTargetSpherical = {
+        theta: 0.28,
+        phi: 1.08,
+        radius: this.getResponsiveOverviewRadius(),
+      };
+      this.camTargetLookAt.set(0.8, 0.25, -0.4);
     } else if (preset === 'pad') {
-      this.camTargetSpherical = { theta: 0.45, phi: 1.18, radius: 13.5 };
-      this.camTargetLookAt.set(2.4, 2.8, -5.2);
+      this.camTargetSpherical = { theta: 0.22, phi: 1.16, radius: 14.5 };
+      this.camTargetLookAt.set(PAD_WORLD_X, 2.8, PAD_WORLD_Z);
     } else if (preset === 'ship') {
-      this.camTargetSpherical = { theta: 0.55, phi: 1.15, radius: 12.8 };
+      this.camTargetSpherical = { theta: 0.42, phi: 1.14, radius: 13.5 };
       this.camTargetLookAt.set(this.droneShipPos.x, 2.0, this.droneShipPos.y);
     } else if (preset === 'reef') {
-      this.camTargetSpherical = { theta: 0.78, phi: 1.36, radius: 16.5 };
-      this.camTargetLookAt.set(2.5, -1.2, 4.5);
+      this.camTargetSpherical = { theta: 0.35, phi: 1.32, radius: 18.5 };
+      this.camTargetLookAt.set(1.2, -0.5, 3.2);
     }
     this.emitTelemetry(true);
   }
@@ -506,14 +530,14 @@ export class SpaceportSimulation {
     this.velocityMs = 0;
     this.downrangeKm = 0;
     this.throttlePct = 0;
-    this.droneShipPos.set(3.6, 5.2);
-    this.tugBoatPos.set(2.4, 0.2);
-    this.fairingBoatPos.set(6.8, -0.1);
+    this.droneShipPos.set(4.2, 3.3);
+    this.tugBoatPos.set(1.45, -1.45);
+    this.fairingBoatPos.set(-0.35, -1.35);
     this.vehicles.towLine.visible = false;
     this.positionStackOnPad();
-    this.updateDigitalScoreboard('T-00:10', '#10b981');
+    this.updateDigitalScoreboard('T-0:10', '#fbbf24');
     this.setCameraPreset('overview');
-    this.exciteJellyImpulse(0, 2.0, 0.9);
+    this.exciteJellyImpulse(0, 2.0, 0.85);
     this.emitTelemetry(true);
   }
 
@@ -522,33 +546,30 @@ export class SpaceportSimulation {
   // ============================================================================
 
   private attachFullStackToStrongback(crawlerX: number, strongbackAngleZ: number, retractAngle = 0): void {
-    const padBaseY = evaluateSeabedHeight(3.8, -5.8);
-    this.vehicles.crawlerGroup.position.set(crawlerX, padBaseY, -5.8);
+    const padBaseY = evaluateSeabedHeight(PAD_WORLD_X, PAD_WORLD_Z);
+    this.vehicles.crawlerGroup.position.set(crawlerX, padBaseY, PAD_WORLD_Z);
     this.vehicles.strongbackPivot.rotation.set(0, 0, strongbackAngleZ + retractAngle);
 
-    // Position rocket along strongback angle (when strongback retracts slightly, rocket stays vertical)
     const rocketAngle = strongbackAngleZ;
-    const pivotWorld = new THREE.Vector3(crawlerX, padBaseY + 0.36, -5.8);
+    const pivotWorld = new THREE.Vector3(crawlerX, padBaseY + 0.56, PAD_WORLD_Z);
 
     this.vehicles.boosterGroup.position.copy(pivotWorld);
     this.vehicles.boosterGroup.rotation.set(0, 0, rocketAngle);
     this.vehicles.boosterPlumeGroup.visible = false;
     this.vehicles.rocketLight.intensity = 0;
 
-    // Fold grid fins & legs flat
     this.vehicles.gridFinPivots.forEach((p) => p.rotation.set(0, p.rotation.y, -Math.PI / 2));
     this.vehicles.legPivots.forEach((p) => p.rotation.set(0, p.rotation.y, 0));
 
-    // Place Stage 2 & Fairings on top of Booster (offset 2.38m along booster axis)
     const upDir = new THREE.Vector3(-Math.sin(rocketAngle), Math.cos(rocketAngle), 0);
-    const s2Pos = pivotWorld.clone().addScaledVector(upDir, 2.38);
+    const s2Pos = pivotWorld.clone().addScaledVector(upDir, STAGE1_TOP_OFFSET);
 
     this.vehicles.stage2Group.visible = true;
     this.vehicles.stage2Group.position.copy(s2Pos);
     this.vehicles.stage2Group.rotation.set(0, 0, rocketAngle);
     this.vehicles.stage2Plume.visible = false;
 
-    const fairingPos = pivotWorld.clone().addScaledVector(upDir, 3.0);
+    const fairingPos = pivotWorld.clone().addScaledVector(upDir, FAIRING_BASE_OFFSET);
     this.vehicles.fairings.forEach((f) => {
       f.group.visible = true;
       f.group.position.copy(fairingPos);
@@ -558,12 +579,12 @@ export class SpaceportSimulation {
   }
 
   private positionStackOnPad(): void {
-    this.islandHandles.hangarDoorLeft.position.z = -2.6 * 0.24;
-    this.islandHandles.hangarDoorRight.position.z = 2.6 * 0.24;
+    this.islandHandles.hangarDoorLeft.position.z = -2.15 * 0.24;
+    this.islandHandles.hangarDoorRight.position.z = 2.15 * 0.24;
     this.islandHandles.craneTurret.rotation.y = 0;
-    this.islandHandles.craneCable.scale.y = 1.4;
-    this.islandHandles.craneSpreader.position.y = -1.4;
-    this.attachFullStackToStrongback(3.8, 0, -0.06);
+    this.islandHandles.craneCable.scale.y = 1.65;
+    this.islandHandles.craneSpreader.position.y = -1.65;
+    this.attachFullStackToStrongback(PAD_WORLD_X, 0, -0.05);
   }
 
   // ============================================================================
@@ -572,45 +593,44 @@ export class SpaceportSimulation {
 
   private updateFlightSequence(dt: number): void {
     this.phaseElapsed += dt;
-    const padBaseY = evaluateSeabedHeight(3.8, -5.8);
+    const padBaseY = evaluateSeabedHeight(PAD_WORLD_X, PAD_WORLD_Z);
     let currentThrustSound = 0;
 
     switch (this.phase) {
       case 'in_hangar': {
-        this.attachFullStackToStrongback(-5.5, -Math.PI / 2, 0);
+        this.attachFullStackToStrongback(HANGAR_WORLD_X, -Math.PI / 2, 0);
         this.islandHandles.hangarDoorLeft.position.z = THREE.MathUtils.lerp(
           this.islandHandles.hangarDoorLeft.position.z,
-          -2.6 * 0.24,
+          -2.15 * 0.24,
           dt * 5
         );
         this.islandHandles.hangarDoorRight.position.z = THREE.MathUtils.lerp(
           this.islandHandles.hangarDoorRight.position.z,
-          2.6 * 0.24,
+          2.15 * 0.24,
           dt * 5
         );
         this.altitudeKm = 0;
         this.velocityMs = 0;
         this.throttlePct = 0;
-        this.stage2Status = 'Horizontal integration in HIF';
-        this.droneShipStatus = 'On station · awaiting rollout';
-        this.fairingBoatStatus = 'In harbour · standby';
+        this.stage2Status = 'In hangar';
+        this.droneShipStatus = 'On station';
+        this.fairingBoatStatus = 'In harbour';
         this.updateDigitalScoreboard('HANGAR', '#38bdf8');
         break;
       }
 
       case 'rolling_out': {
-        const dur = 3.8;
+        const dur = 3.6;
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
         const smoothT = THREE.MathUtils.smoothstep(t, 0, 1);
 
-        // Open bi-parting hangar doors
-        this.islandHandles.hangarDoorLeft.position.z = THREE.MathUtils.lerp(-0.62, -1.18, Math.min(1, t * 3));
-        this.islandHandles.hangarDoorRight.position.z = THREE.MathUtils.lerp(0.62, 1.18, Math.min(1, t * 3));
+        this.islandHandles.hangarDoorLeft.position.z = THREE.MathUtils.lerp(-0.52, -1.0, Math.min(1, t * 3));
+        this.islandHandles.hangarDoorRight.position.z = THREE.MathUtils.lerp(0.52, 1.0, Math.min(1, t * 3));
 
-        const crawlerX = THREE.MathUtils.lerp(-5.5, 3.8, smoothT);
+        const crawlerX = THREE.MathUtils.lerp(HANGAR_WORLD_X, PAD_WORLD_X, smoothT);
         this.attachFullStackToStrongback(crawlerX, -Math.PI / 2, 0);
         this.updateDigitalScoreboard('ROLL OUT', '#38bdf8');
-        this.stage2Status = 'Transporter rolling to LC-1';
+        this.stage2Status = 'Rolling to pad';
 
         if (t >= 1) {
           this.phase = 'erecting';
@@ -620,47 +640,53 @@ export class SpaceportSimulation {
       }
 
       case 'erecting': {
-        const dur = 2.6;
+        const dur = 2.4;
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
         const smoothT = THREE.MathUtils.smoothstep(t, 0, 1);
         const angle = THREE.MathUtils.lerp(-Math.PI / 2, 0, smoothT);
 
-        // Close hangar doors once clear
-        this.islandHandles.hangarDoorLeft.position.z = THREE.MathUtils.lerp(-1.18, -0.62, smoothT);
-        this.islandHandles.hangarDoorRight.position.z = THREE.MathUtils.lerp(1.18, 0.62, smoothT);
+        this.islandHandles.hangarDoorLeft.position.z = THREE.MathUtils.lerp(-1.0, -0.52, smoothT);
+        this.islandHandles.hangarDoorRight.position.z = THREE.MathUtils.lerp(1.0, 0.52, smoothT);
 
-        this.attachFullStackToStrongback(3.8, angle, 0);
+        this.attachFullStackToStrongback(PAD_WORLD_X, angle, 0);
         this.updateDigitalScoreboard('ERECTING', '#38bdf8');
-        this.stage2Status = 'Strongback raising stack vertical';
+        this.stage2Status = 'Erecting on pad';
 
         if (t >= 1) {
           this.phase = 'on_pad';
           this.phaseElapsed = 0;
           this.countdownRemaining = 10.0;
-          this.updateDigitalScoreboard('T-00:10', '#10b981');
+          this.updateDigitalScoreboard('T-0:10', '#fbbf24');
           this.emitTelemetry(true);
         }
         break;
       }
 
       case 'on_pad': {
-        this.attachFullStackToStrongback(3.8, 0, -0.05);
-        // Occasional cryogenic LOX vent puff
+        this.attachFullStackToStrongback(PAD_WORLD_X, 0, -0.05);
         if (Math.random() < dt * 3.5) {
-          this.effects.spawnSmoke(3.8, padBaseY + 2.1, -5.8, 0.35, 0.25, 0.1, 0.08, 0.32, 1.1, 0);
+          this.effects.spawnSmoke(
+            PAD_WORLD_X,
+            padBaseY + 2.4,
+            PAD_WORLD_Z,
+            0.35,
+            0.25,
+            0.1,
+            0.08,
+            0.3,
+            1.1,
+            0
+          );
         }
-        this.stage2Status = 'LOX / RP-1 propellant load complete';
-        this.droneShipStatus =
-          this.landingTarget === 'drone_ship'
-            ? 'On station · ready to catch B1'
-            : 'Standby at sea (RTLS selected)';
-        this.fairingBoatStatus = 'In harbour · ready to depart';
+        this.stage2Status = 'Count';
+        this.droneShipStatus = 'On station';
+        this.fairingBoatStatus = 'In harbour';
         break;
       }
 
       case 'hold': {
-        this.attachFullStackToStrongback(3.8, 0, -0.06);
-        this.stage2Status = 'Countdown holding · awaiting range go';
+        this.attachFullStackToStrongback(PAD_WORLD_X, 0, -0.06);
+        this.stage2Status = 'Hold';
         break;
       }
 
@@ -680,19 +706,18 @@ export class SpaceportSimulation {
           soundEngine.playCountdownBeep(secCeil);
         }
 
-        const retract = this.countdownRemaining < 3.5 ? -0.18 : -0.06;
-        this.attachFullStackToStrongback(3.8, 0, retract);
+        const retract = this.countdownRemaining < 3.5 ? -0.18 : -0.05;
+        this.attachFullStackToStrongback(PAD_WORLD_X, 0, retract);
 
-        // Pre-ignition deluge water steam at T-3s
         if (this.countdownRemaining < 3.0) {
           for (let s = 0; s < 2; s++) {
             this.effects.spawnSmoke(
-              3.8 + (Math.random() - 0.5) * 0.4,
+              PAD_WORLD_X + (Math.random() - 0.5) * 0.4,
               padBaseY + 0.35,
-              -5.8 + (Math.random() - 0.5) * 0.4,
-              (Math.random() - 0.5) * 1.8,
-              0.45,
-              (Math.random() - 0.5) * 1.8,
+              PAD_WORLD_Z + 0.8 + (Math.random() - 0.5) * 0.4,
+              (Math.random() - 0.5) * 1.4,
+              0.4,
+              1.4 + Math.random() * 1.2,
               0.16,
               0.75,
               1.2,
@@ -702,15 +727,15 @@ export class SpaceportSimulation {
         }
 
         const padSec = String(secCeil).padStart(2, '0');
-        this.updateDigitalScoreboard(`T-00:${padSec}`, secCeil <= 3 ? '#f59e0b' : '#10b981');
-        this.stage2Status = secCeil <= 3 ? 'Water deluge & engine chilldown' : 'Startup — internal power';
+        this.updateDigitalScoreboard(`T-0:${padSec}`, '#fbbf24');
+        this.stage2Status = secCeil <= 3 ? 'Ignition sequence' : 'Count';
 
         if (this.countdownRemaining <= 0) {
           this.phase = 'ignition';
           this.phaseElapsed = 0;
           this.launches += 1;
           soundEngine.playCountdownBeep(0);
-          this.exciteJellyImpulse(3.8, -3.5, 1.35);
+          this.exciteJellyImpulse(PAD_WORLD_X, -2.5, 1.25);
           this.emitTelemetry(true);
         }
         break;
@@ -719,27 +744,26 @@ export class SpaceportSimulation {
       case 'ignition': {
         const dur = 1.25;
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
-        this.attachFullStackToStrongback(3.8, 0, -0.26);
+        this.attachFullStackToStrongback(PAD_WORLD_X, 0, -0.24);
 
         this.vehicles.boosterPlumeGroup.visible = true;
         this.vehicles.boosterPlumeGroup.scale.setScalar(0.85 + Math.random() * 0.35);
         this.vehicles.rocketLight.intensity = 4.5 + Math.random() * 1.5;
-        this.jellySurfaceMat.uniforms.uRocketLightPos.value.set(3.8, padBaseY + 1.0, -5.8);
-        this.jellySurfaceMat.uniforms.uRocketLightIntensity.value = 1.6;
+        this.jellySurfaceMat.uniforms.uRocketLightPos.value.set(PAD_WORLD_X, padBaseY + 1.0, PAD_WORLD_Z);
+        this.jellySurfaceMat.uniforms.uRocketLightIntensity.value = 1.5;
         currentThrustSound = 0.85;
         this.throttlePct = 100;
 
-        // Massive flame trench steam & ignition smoke billowing outward
         for (let i = 0; i < 5; i++) {
           const ang = Math.random() * Math.PI * 2;
-          const spd = 1.8 + Math.random() * 2.8;
+          const spd = 1.6 + Math.random() * 2.5;
           this.effects.spawnSmoke(
-            3.8 + Math.cos(ang) * 0.3,
+            PAD_WORLD_X + Math.cos(ang) * 0.3,
             padBaseY + 0.35,
-            -5.8 + Math.sin(ang) * 0.3,
+            PAD_WORLD_Z + 0.6 + Math.sin(ang) * 0.3,
             Math.cos(ang) * spd,
             0.3 + Math.random() * 0.6,
-            Math.sin(ang) * spd,
+            Math.sin(ang) * spd + 1.1,
             0.25,
             1.65,
             1.9,
@@ -747,7 +771,8 @@ export class SpaceportSimulation {
           );
         }
 
-        this.updateDigitalScoreboard('IGNITION', '#f97316');
+        this.stage2Status = 'Ignition';
+        this.updateDigitalScoreboard('LIFTOFF', '#f97316');
         if (t >= 1) {
           this.phase = 'liftoff';
           this.phaseElapsed = 0;
@@ -761,16 +786,15 @@ export class SpaceportSimulation {
           this.phase === 'liftoff' ? this.phaseElapsed : 4.0 + this.phaseElapsed;
         const normT = THREE.MathUtils.clamp(totalAscentElapsed / 7.8, 0, 1);
 
-        // Accelerating vertical climb + gentle gravity turn pitch downrange (+X, +Z)
-        const climbY = Math.pow(normT, 1.88) * 16.8;
+        const climbY = Math.pow(normT, 1.88) * 16.5;
         const downrangeZ = Math.pow(normT, 2.1) * 4.2;
-        const downrangeX = Math.pow(normT, 2.1) * 1.4;
-        const pitchZ = -normT * 0.16;
-        const pitchX = normT * 0.24;
+        const downrangeX = Math.pow(normT, 2.1) * 1.2;
+        const pitchZ = -normT * 0.14;
+        const pitchX = normT * 0.22;
 
-        const rx = 3.8 + downrangeX;
-        const ry = padBaseY + 0.36 + climbY;
-        const rz = -5.8 + downrangeZ;
+        const rx = PAD_WORLD_X + downrangeX;
+        const ry = padBaseY + 0.56 + climbY;
+        const rz = PAD_WORLD_Z + downrangeZ;
 
         this.vehicles.boosterGroup.position.set(rx, ry, rz);
         this.vehicles.boosterGroup.rotation.set(pitchX, 0, pitchZ);
@@ -784,17 +808,19 @@ export class SpaceportSimulation {
         this.jellySurfaceMat.uniforms.uRocketLightPos.value.set(rx, ry, rz);
         this.jellySurfaceMat.uniforms.uRocketLightIntensity.value = Math.max(0.2, 1.5 - normT * 1.1);
 
-        // Attach Stage 2 & Fairings along the pitched booster axis
         const upVec = new THREE.Vector3(0, 1, 0).applyEuler(this.vehicles.boosterGroup.rotation);
-        this.vehicles.stage2Group.position.copy(this.vehicles.boosterGroup.position).addScaledVector(upVec, 2.38);
+        this.vehicles.stage2Group.position
+          .copy(this.vehicles.boosterGroup.position)
+          .addScaledVector(upVec, STAGE1_TOP_OFFSET);
         this.vehicles.stage2Group.rotation.copy(this.vehicles.boosterGroup.rotation);
 
         this.vehicles.fairings.forEach((f) => {
-          f.group.position.copy(this.vehicles.boosterGroup.position).addScaledVector(upVec, 3.0);
+          f.group.position
+            .copy(this.vehicles.boosterGroup.position)
+            .addScaledVector(upVec, FAIRING_BASE_OFFSET);
           f.group.rotation.copy(this.vehicles.boosterGroup.rotation);
         });
 
-        // Exhaust smoke plume trail
         for (let i = 0; i < 3; i++) {
           this.effects.spawnSmoke(
             rx - upVec.x * 0.6 + (Math.random() - 0.5) * 0.22,
@@ -810,10 +836,11 @@ export class SpaceportSimulation {
           );
         }
 
-        // Fairing boat sails out downrange toward (6.5, 4.8)
-        this.fairingBoatPos.x = THREE.MathUtils.lerp(6.8, 6.4, normT);
-        this.fairingBoatPos.y = THREE.MathUtils.lerp(-0.1, 4.8, normT);
-        this.fairingBoatStatus = 'Heading downrange · tracking fairings';
+        // Fairing boat heads downrange from (-0.35, -1.35) toward (0.8, 4.6)
+        this.fairingBoatPos.x = THREE.MathUtils.lerp(-0.35, 0.8, normT);
+        this.fairingBoatPos.y = THREE.MathUtils.lerp(-1.35, 4.6, normT);
+        this.fairingBoatStatus = 'Heading downrange';
+        this.stage2Status = this.phase === 'liftoff' ? 'Liftoff' : 'Max Q';
 
         this.altitudeKm = Math.round(normT * 68 * 10) / 10;
         this.velocityMs = Math.round(normT * 1680);
@@ -831,12 +858,11 @@ export class SpaceportSimulation {
           this.phase = 'meco_sep';
           this.phaseElapsed = 0;
           soundEngine.playStageSep();
-          // Cold-gas stage separation puff ring
           for (let k = 0; k < 10; k++) {
             const a = (k / 10) * Math.PI * 2;
             this.effects.spawnSmoke(
               rx,
-              ry + 2.3,
+              ry + 2.8,
               rz,
               Math.cos(a) * 1.4,
               0.2,
@@ -856,29 +882,26 @@ export class SpaceportSimulation {
         const dur = 2.6;
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
 
-        // Stage 1 coasts upward slightly and begins pitching over for boostback flip
         const bPos = this.vehicles.boosterGroup.position;
         bPos.y = 19.3 + Math.sin(t * Math.PI * 0.5) * 1.4;
-        this.vehicles.boosterGroup.rotation.set(0.24 + t * 0.85, 0, -0.16 - t * 0.35);
+        this.vehicles.boosterGroup.rotation.set(0.22 + t * 0.85, 0, -0.14 - t * 0.35);
         this.vehicles.boosterPlumeGroup.visible = false;
         this.vehicles.rocketLight.intensity = 0;
         this.jellySurfaceMat.uniforms.uRocketLightIntensity.value = 0;
 
-        // Stage 2 lights vacuum engine and accelerates up and away
         this.vehicles.stage2Plume.visible = true;
         this.vehicles.stage2Group.position.set(
-          5.2 + t * 2.2,
-          21.7 + t * 4.5,
-          -1.6 + t * 2.8
+          3.0 + t * 2.2,
+          22.2 + t * 4.5,
+          -2.0 + t * 2.8
         );
 
-        // Clamshell Fairing halves split apart and deploy striped Parafoils!
         this.vehicles.fairings.forEach((f, idx) => {
           const side = idx === 0 ? -1 : 1;
           f.group.position.set(
-            5.2 + side * (0.25 + t * 1.35),
-            21.8 + t * 0.6 - t * t * 1.2,
-            -1.4 + t * 1.8
+            3.0 + side * (0.25 + t * 1.35),
+            22.4 + t * 0.6 - t * t * 1.2,
+            -1.8 + t * 1.8
           );
           f.group.rotation.set(0.2, side * 0.4, side * t * 0.5);
           f.parafoilGroup.visible = t > 0.35;
@@ -891,7 +914,8 @@ export class SpaceportSimulation {
         this.altitudeKm = 74.5 + t * 12;
         this.velocityMs = 1620 - Math.round(t * 140);
         this.throttlePct = 0;
-        this.stage2Status = 'Second stage MVac ignition · fairing sep';
+        this.stage2Status = 'Stage separation';
+        this.fairingBoatStatus = 'Waiting downrange';
         this.updateDigitalScoreboard('STAGE SEP', '#38bdf8');
 
         if (t >= 1) {
@@ -906,16 +930,14 @@ export class SpaceportSimulation {
         const dur = 3.6;
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
 
-        const targetX = this.landingTarget === 'drone_ship' ? this.droneShipPos.x : -6.8;
-        const targetZ = this.landingTarget === 'drone_ship' ? this.droneShipPos.y : 0.8;
+        const targetX = this.landingTarget === 'drone_ship' ? this.droneShipPos.x : LZ_WORLD_X;
+        const targetZ = this.landingTarget === 'drone_ship' ? this.droneShipPos.y : LZ_WORLD_Z;
 
-        // Booster arcs at high altitude toward target while firing boostback burn
-        const bx = THREE.MathUtils.lerp(5.2, (5.2 + targetX) * 0.5, t);
-        const bz = THREE.MathUtils.lerp(-1.6, (-1.6 + targetZ) * 0.5, t);
+        const bx = THREE.MathUtils.lerp(3.0, (3.0 + targetX) * 0.5, t);
+        const bz = THREE.MathUtils.lerp(-2.0, (-2.0 + targetZ) * 0.5, t);
         const by = 20.7 - t * 3.2;
 
         this.vehicles.boosterGroup.position.set(bx, by, bz);
-        // Flip back to vertical engines-down orientation while deploying grid fins
         const flipAngle = THREE.MathUtils.lerp(1.05, 0.18, THREE.MathUtils.smoothstep(t, 0, 1));
         this.vehicles.boosterGroup.rotation.set(flipAngle, 0, -flipAngle * 0.4);
 
@@ -924,23 +946,20 @@ export class SpaceportSimulation {
         currentThrustSound = 0.55;
         this.throttlePct = 65;
 
-        // Deploy Titanium Grid Fins outward
         const finDeploy = THREE.MathUtils.lerp(-Math.PI / 2, 0, Math.min(1, t * 2));
         this.vehicles.gridFinPivots.forEach((p) => p.rotation.set(0, p.rotation.y, finDeploy));
 
-        // Stage 2 climbs out of frame into orbit
         this.vehicles.stage2Group.position.y += dt * 6.5;
         if (this.vehicles.stage2Group.position.y > 42) {
           this.vehicles.stage2Group.visible = false;
         }
 
-        // Fairings glide down under parafoils toward the Fairing Boat at (6.4, 4.8)
         this.updateParafoilFairings(t * 0.35);
 
         this.altitudeKm = Math.round((86 - t * 18) * 10) / 10;
         this.velocityMs = Math.round(1480 - t * 420);
-        this.stage2Status = 'Stage 2 in nominal orbital insertion';
-        this.fairingBoatStatus = 'Lining up catch net under parafoils';
+        this.stage2Status = 'Boostback burn';
+        this.fairingBoatStatus = 'Lining up the net';
         this.updateDigitalScoreboard('BOOSTBACK', '#f97316');
 
         if (t >= 1) {
@@ -955,23 +974,18 @@ export class SpaceportSimulation {
         const dur = 3.4;
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
 
-        const targetX = this.landingTarget === 'drone_ship' ? this.droneShipPos.x : -6.8;
-        const targetZ = this.landingTarget === 'drone_ship' ? this.droneShipPos.y : 0.8;
+        const targetX = this.landingTarget === 'drone_ship' ? this.droneShipPos.x : LZ_WORLD_X;
+        const targetZ = this.landingTarget === 'drone_ship' ? this.droneShipPos.y : LZ_WORLD_Z;
 
-        const startX = (5.2 + targetX) * 0.5;
-        const startZ = (-1.6 + targetZ) * 0.5;
+        const startX = (3.0 + targetX) * 0.5;
+        const startZ = (-2.0 + targetZ) * 0.5;
         const bx = THREE.MathUtils.lerp(startX, targetX, t * 0.72);
         const bz = THREE.MathUtils.lerp(startZ, targetZ, t * 0.72);
         const by = THREE.MathUtils.lerp(17.5, 9.8, t);
 
         this.vehicles.boosterGroup.position.set(bx, by, bz);
-        this.vehicles.boosterGroup.rotation.set(
-          0.14 * (1 - t),
-          0,
-          -0.08 * (1 - t)
-        );
+        this.vehicles.boosterGroup.rotation.set(0.14 * (1 - t), 0, -0.08 * (1 - t));
 
-        // Dramatic Entry Burn plasma trail
         this.vehicles.boosterPlumeGroup.visible = true;
         this.vehicles.boosterPlumeGroup.scale.set(1.1, 1.45, 1.1);
         currentThrustSound = 0.72;
@@ -996,6 +1010,7 @@ export class SpaceportSimulation {
 
         this.altitudeKm = Math.round((68 - t * 42) * 10) / 10;
         this.velocityMs = Math.round(1060 - t * 620);
+        this.stage2Status = 'Entry burn';
         this.updateDigitalScoreboard('ENTRY BURN', '#f97316');
 
         if (t >= 1) {
@@ -1011,11 +1026,11 @@ export class SpaceportSimulation {
         const dur = 3.0;
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
 
-        const targetX = this.landingTarget === 'drone_ship' ? this.droneShipPos.x : -6.8;
-        const targetZ = this.landingTarget === 'drone_ship' ? this.droneShipPos.y : 0.8;
+        const targetX = this.landingTarget === 'drone_ship' ? this.droneShipPos.x : LZ_WORLD_X;
+        const targetZ = this.landingTarget === 'drone_ship' ? this.droneShipPos.y : LZ_WORLD_Z;
 
-        const startX = THREE.MathUtils.lerp((5.2 + targetX) * 0.5, targetX, 0.72);
-        const startZ = THREE.MathUtils.lerp((-1.6 + targetZ) * 0.5, targetZ, 0.72);
+        const startX = THREE.MathUtils.lerp((3.0 + targetX) * 0.5, targetX, 0.72);
+        const startZ = THREE.MathUtils.lerp((-2.0 + targetZ) * 0.5, targetZ, 0.72);
 
         const bx = THREE.MathUtils.lerp(startX, targetX, t);
         const bz = THREE.MathUtils.lerp(startZ, targetZ, t);
@@ -1030,7 +1045,6 @@ export class SpaceportSimulation {
         this.vehicles.boosterPlumeGroup.visible = false;
         this.throttlePct = 0;
 
-        // Active aerodynamic grid fin steering oscillation
         this.vehicles.gridFinPivots.forEach((p, idx) => {
           p.rotation.x = Math.sin(this.simTime * 8 + idx) * 0.22;
         });
@@ -1044,6 +1058,7 @@ export class SpaceportSimulation {
 
         this.altitudeKm = Math.round((26 - t * 21) * 10) / 10;
         this.velocityMs = Math.round(440 - t * 240);
+        this.stage2Status = 'Grid fins steering';
         this.updateDigitalScoreboard('GRID FINS', '#38bdf8');
 
         if (t >= 1) {
@@ -1059,12 +1074,12 @@ export class SpaceportSimulation {
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
         const easeOut = 1 - Math.pow(1 - t, 2.4);
 
-        const targetX = this.landingTarget === 'drone_ship' ? this.droneShipPos.x : -6.8;
-        const targetZ = this.landingTarget === 'drone_ship' ? this.droneShipPos.y : 0.8;
+        const targetX = this.landingTarget === 'drone_ship' ? this.droneShipPos.x : LZ_WORLD_X;
+        const targetZ = this.landingTarget === 'drone_ship' ? this.droneShipPos.y : LZ_WORLD_Z;
         const targetTouchdownY =
           this.landingTarget === 'drone_ship'
-            ? this.vehicles.droneShipGroup.position.y + 0.24
-            : evaluateSeabedHeight(-6.8, 0.8) + 0.16;
+            ? this.vehicles.droneShipGroup.position.y + 0.2
+            : evaluateSeabedHeight(LZ_WORLD_X, LZ_WORLD_Z) + 0.09;
 
         const by = THREE.MathUtils.lerp(5.4, targetTouchdownY, easeOut);
         this.vehicles.boosterGroup.position.set(targetX, by, targetZ);
@@ -1078,14 +1093,12 @@ export class SpaceportSimulation {
         currentThrustSound = 0.78 * (1 - t * 0.4);
         this.throttlePct = Math.round(85 - t * 45);
 
-        // Deploy 4 Carbon-Fiber Landing Legs in the final 55% of landing burn!
         const legT = THREE.MathUtils.smoothstep(t, 0.38, 0.82);
         const legAngle = THREE.MathUtils.lerp(0, 2.04, legT);
         this.vehicles.legPivots.forEach((p) => {
           p.rotation.z = -legAngle;
         });
 
-        // Plume wash ripples & mist on water/pad
         if (t > 0.35) {
           if (this.landingTarget === 'drone_ship' && Math.random() < dt * 7) {
             this.exciteJellyImpulse(targetX, targetZ, 0.38);
@@ -1107,11 +1120,11 @@ export class SpaceportSimulation {
           }
         }
 
-        // Complete fairing catch on the Fairing Boat net!
         this.updateParafoilFairings(0.92 + t * 0.08);
 
-        this.altitudeKm = Math.round((5.0 * (1 - easeOut)) * 100) / 100;
+        this.altitudeKm = Math.round(5.0 * (1 - easeOut) * 100) / 100;
         this.velocityMs = Math.round(200 * (1 - easeOut));
+        this.stage2Status = 'Landing burn';
         this.updateDigitalScoreboard('LANDING', '#f59e0b');
 
         if (t >= 1) {
@@ -1138,12 +1151,10 @@ export class SpaceportSimulation {
         this.altitudeKm = 0;
         this.velocityMs = 0;
         this.throttlePct = 0;
-        this.stage2Status = 'Payload deployed in orbit';
-        this.fairingBoatStatus = 'Both fairing halves caught in net!';
+        this.stage2Status = 'Landed';
+        this.fairingBoatStatus = 'Fairings caught';
         this.droneShipStatus =
-          this.landingTarget === 'drone_ship'
-            ? 'Booster landed on deck · securing'
-            : 'Booster landed at LZ-1';
+          this.landingTarget === 'drone_ship' ? 'Booster landed' : 'On station';
 
         if (this.phaseElapsed >= dur) {
           this.phase = this.landingTarget === 'drone_ship' ? 'tug_recovery' : 'refurbishing';
@@ -1154,38 +1165,36 @@ export class SpaceportSimulation {
       }
 
       case 'tug_recovery': {
-        // Tugboat tows the Drone Ship (carrying the landed booster) into the Harbour Pier beside the Crane!
-        const dur = 5.2;
+        const dur = 5.0;
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
         const smoothT = THREE.MathUtils.smoothstep(t, 0, 1);
 
-        // Drone ship moves from sea station (3.6, 5.2) to harbour berth (4.3, 0.45)
-        this.droneShipPos.x = THREE.MathUtils.lerp(3.6, 4.3, smoothT);
-        this.droneShipPos.y = THREE.MathUtils.lerp(5.2, 0.45, smoothT);
+        // Drone ship towed from (4.2, 3.3) to harbour crane berth (5.05, 0.15)
+        this.droneShipPos.x = THREE.MathUtils.lerp(4.2, 5.05, smoothT);
+        this.droneShipPos.y = THREE.MathUtils.lerp(3.3, 0.15, smoothT);
 
-        // Tugboat leads ahead of the Drone Ship bow and connects the yellow tow cable
-        this.tugBoatPos.x = this.droneShipPos.x - 1.65;
-        this.tugBoatPos.y = this.droneShipPos.y - 0.55;
+        this.tugBoatPos.x = this.droneShipPos.x - 1.55;
+        this.tugBoatPos.y = this.droneShipPos.y - 0.45;
 
         this.vehicles.towLine.visible = true;
-        this.vehicles.towLinePositions[0] = this.tugBoatPos.x + 0.35;
-        this.vehicles.towLinePositions[1] = this.vehicles.tugBoatGroup.position.y + 0.15;
+        this.vehicles.towLinePositions[0] = this.tugBoatPos.x + 0.3;
+        this.vehicles.towLinePositions[1] = this.vehicles.tugBoatGroup.position.y + 0.14;
         this.vehicles.towLinePositions[2] = this.tugBoatPos.y;
         this.vehicles.towLinePositions[3] = this.droneShipPos.x - 1.25;
-        this.vehicles.towLinePositions[4] = this.vehicles.droneShipGroup.position.y + 0.24;
+        this.vehicles.towLinePositions[4] = this.vehicles.droneShipGroup.position.y + 0.22;
         this.vehicles.towLinePositions[5] = this.droneShipPos.y;
         this.vehicles.towLine.geometry.attributes.position.needsUpdate = true;
 
-        // Fairing boat also sails back toward harbour
-        this.fairingBoatPos.x = THREE.MathUtils.lerp(6.4, 6.8, smoothT);
-        this.fairingBoatPos.y = THREE.MathUtils.lerp(4.8, -0.1, smoothT);
+        this.fairingBoatPos.x = THREE.MathUtils.lerp(0.8, -0.35, smoothT);
+        this.fairingBoatPos.y = THREE.MathUtils.lerp(4.6, -1.35, smoothT);
         this.vehicles.fairings.forEach((f) => {
           f.group.visible = false;
         });
 
         this.pinBoosterToLandingSite();
-        this.droneShipStatus = 'Under tow by harbour tug to pier';
-        this.fairingBoatStatus = 'Returning caught fairings to port';
+        this.stage2Status = 'Under tow';
+        this.droneShipStatus = 'Towing to harbour';
+        this.fairingBoatStatus = 'In harbour';
         this.updateDigitalScoreboard('UNDER TOW', '#38bdf8');
 
         if (t >= 1) {
@@ -1198,45 +1207,41 @@ export class SpaceportSimulation {
       }
 
       case 'crane_offload': {
-        // Port Hammerhead Crane rotates over the berthed Drone Ship, lifts the booster off the deck, and swings it ashore!
-        const dur = 4.6;
+        const dur = 4.4;
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
 
-        this.droneShipStatus = 'Berthed at pier · crane offloading B1';
-        this.updateDigitalScoreboard('CRANE LIFT', '#eab308');
+        this.stage2Status = 'Crane lift';
+        this.droneShipStatus = 'At berth · crane lift';
+        this.updateDigitalScoreboard('RECOVERY', '#eab308');
 
         if (t < 0.3) {
-          // Crane lowers spreader hook onto booster interstage
           const subT = t / 0.3;
-          this.islandHandles.craneTurret.rotation.y = THREE.MathUtils.lerp(0, -0.12, subT);
-          const cableLen = THREE.MathUtils.lerp(1.4, 2.25, subT);
+          this.islandHandles.craneTurret.rotation.y = THREE.MathUtils.lerp(0, 0.0, subT);
+          const cableLen = THREE.MathUtils.lerp(1.65, 2.25, subT);
           this.islandHandles.craneCable.scale.y = cableLen;
           this.islandHandles.craneSpreader.position.y = -cableLen;
           this.pinBoosterToLandingSite();
         } else {
-          // Crane hoists booster up and swings turret toward shore transfer cradle
           const subT = THREE.MathUtils.smoothstep((t - 0.3) / 0.7, 0, 1);
-          const rotY = THREE.MathUtils.lerp(-0.12, -1.45, subT);
+          const rotY = THREE.MathUtils.lerp(0.0, -1.35, subT);
           this.islandHandles.craneTurret.rotation.y = rotY;
 
-          const liftOffset = Math.sin(subT * Math.PI) * 1.35 + subT * 0.55;
+          const liftOffset = Math.sin(subT * Math.PI) * 1.25 + subT * 0.45;
           const cableLen = Math.max(0.85, 2.25 - liftOffset * 0.65);
           this.islandHandles.craneCable.scale.y = cableLen;
           this.islandHandles.craneSpreader.position.y = -cableLen;
 
-          // Compute world position of crane spreader hook so booster hangs directly beneath it
           const spreaderWorld = new THREE.Vector3();
           this.islandHandles.craneSpreader.getWorldPosition(spreaderWorld);
           this.dioramaGroup.worldToLocal(spreaderWorld);
 
           this.vehicles.boosterGroup.position.set(
             spreaderWorld.x,
-            spreaderWorld.y - 2.38,
+            spreaderWorld.y - STAGE1_TOP_OFFSET,
             spreaderWorld.z
           );
           this.vehicles.boosterGroup.rotation.set(0, rotY, 0);
 
-          // Fold landing legs back up while suspended on the crane
           const legFold = THREE.MathUtils.lerp(2.04, 0, subT);
           this.vehicles.legPivots.forEach((p) => {
             p.rotation.z = -legFold;
@@ -1252,14 +1257,13 @@ export class SpaceportSimulation {
       }
 
       case 'refurbishing': {
-        const dur = 2.2;
+        const dur = 2.0;
         const t = THREE.MathUtils.clamp(this.phaseElapsed / dur, 0, 1);
 
-        // Return Drone Ship to sea station and reset crane
-        this.droneShipPos.x = THREE.MathUtils.lerp(this.droneShipPos.x, 3.6, dt * 3);
-        this.droneShipPos.y = THREE.MathUtils.lerp(this.droneShipPos.y, 5.2, dt * 3);
-        this.tugBoatPos.x = THREE.MathUtils.lerp(this.tugBoatPos.x, 2.4, dt * 3);
-        this.tugBoatPos.y = THREE.MathUtils.lerp(this.tugBoatPos.y, 0.2, dt * 3);
+        this.droneShipPos.x = THREE.MathUtils.lerp(this.droneShipPos.x, 4.2, dt * 3);
+        this.droneShipPos.y = THREE.MathUtils.lerp(this.droneShipPos.y, 3.3, dt * 3);
+        this.tugBoatPos.x = THREE.MathUtils.lerp(this.tugBoatPos.x, 1.45, dt * 3);
+        this.tugBoatPos.y = THREE.MathUtils.lerp(this.tugBoatPos.y, -1.45, dt * 3);
         this.islandHandles.craneTurret.rotation.y = THREE.MathUtils.lerp(
           this.islandHandles.craneTurret.rotation.y,
           0,
@@ -1273,12 +1277,12 @@ export class SpaceportSimulation {
         if (t >= 1) {
           this.flightNumber += 1;
           this.reflows += 1;
-          this.droneShipPos.set(3.6, 5.2);
-          this.tugBoatPos.set(2.4, 0.2);
-          this.fairingBoatPos.set(6.8, -0.1);
+          this.droneShipPos.set(4.2, 3.3);
+          this.tugBoatPos.set(1.45, -1.45);
+          this.fairingBoatPos.set(-0.35, -1.35);
           this.phase = 'in_hangar';
           this.phaseElapsed = 0;
-          this.attachFullStackToStrongback(-5.5, -Math.PI / 2, 0);
+          this.attachFullStackToStrongback(HANGAR_WORLD_X, -Math.PI / 2, 0);
           soundEngine.playRecoveryChime();
           this.emitTelemetry(true);
         }
@@ -1291,9 +1295,9 @@ export class SpaceportSimulation {
 
   private updateParafoilFairings(progress: number): void {
     const p = THREE.MathUtils.clamp(progress, 0, 1);
-    const boatX = this.fairingBoatPos.x + 0.28;
+    const boatX = this.fairingBoatPos.x + 0.24;
     const boatZ = this.fairingBoatPos.y;
-    const catchY = this.vehicles.fairingBoatGroup.position.y + 0.78;
+    const catchY = this.vehicles.fairingBoatGroup.position.y + 0.72;
 
     this.vehicles.fairings.forEach((f, idx) => {
       const side = idx === 0 ? -1 : 1;
@@ -1302,9 +1306,9 @@ export class SpaceportSimulation {
       f.parafoilGroup.scale.setScalar(1.0);
 
       const sTurn = Math.sin(p * Math.PI * 3 + idx * 1.5) * (1 - p) * 1.4;
-      const fx = THREE.MathUtils.lerp(5.2 + side * 1.6, boatX + side * 0.16, p) + sTurn;
-      const fz = THREE.MathUtils.lerp(0.4, boatZ + side * 0.14, p);
-      const fy = THREE.MathUtils.lerp(21.2, catchY, Math.pow(p, 0.85));
+      const fx = THREE.MathUtils.lerp(3.0 + side * 1.5, boatX + side * 0.14, p) + sTurn;
+      const fz = THREE.MathUtils.lerp(0.5, boatZ + side * 0.12, p);
+      const fy = THREE.MathUtils.lerp(21.5, catchY, Math.pow(p, 0.85));
 
       f.group.position.set(fx, fy, fz);
       f.group.rotation.set(0.08 * (1 - p), side * 0.2, Math.cos(p * Math.PI * 3) * 0.18 * (1 - p));
@@ -1315,23 +1319,24 @@ export class SpaceportSimulation {
     if (this.landingTarget === 'drone_ship') {
       const shipPos = this.vehicles.droneShipGroup.position;
       const shipRot = this.vehicles.droneShipGroup.rotation;
-      this.vehicles.boosterGroup.position.set(shipPos.x, shipPos.y + 0.24, shipPos.z);
+      this.vehicles.boosterGroup.position.set(shipPos.x, shipPos.y + 0.2, shipPos.z);
       this.vehicles.boosterGroup.rotation.copy(shipRot);
     } else {
-      const lzY = evaluateSeabedHeight(-6.8, 0.8);
-      this.vehicles.boosterGroup.position.set(-6.8, lzY + 0.16, 0.8);
+      const lzY = evaluateSeabedHeight(LZ_WORLD_X, LZ_WORLD_Z);
+      this.vehicles.boosterGroup.position.set(LZ_WORLD_X, lzY + 0.09, LZ_WORLD_Z);
       this.vehicles.boosterGroup.rotation.set(0, 0, 0);
     }
   }
 
   private applyBoosterSoot(): void {
-    const clean = new THREE.Color(SCENE_PALETTE.rocketBody);
+    const clean = new THREE.Color('#f8f8f6');
     const sooty = new THREE.Color('#6b665e');
     this.vehicles.boosterBodyMat.color.copy(clean).lerp(sooty, Math.min(0.65, this.sootLevel));
   }
 
   private updateCameraFraming(dt: number): void {
-    // Intelligent automatic framing when in 'overview' or 'booster' mode during active flight
+    const baseOverviewRadius = this.getResponsiveOverviewRadius();
+
     if (this.cameraPreset === 'booster') {
       const bPos = this.vehicles.boosterGroup.position;
       this.camTargetLookAt.lerp(new THREE.Vector3(bPos.x, Math.max(1.5, bPos.y + 0.8), bPos.z), dt * 6);
@@ -1347,12 +1352,12 @@ export class SpaceportSimulation {
         this.phase === 'landing_burn';
 
       if (inAir) {
-        const focusY = THREE.MathUtils.clamp(bPos.y * 0.52, 0.8, 10.5);
-        this.camTargetLookAt.set(bPos.x * 0.25, focusY, bPos.z * 0.25);
-        this.camTargetSpherical.radius = 28.5 + THREE.MathUtils.clamp(bPos.y * 0.48, 0, 11.5);
+        const focusY = THREE.MathUtils.clamp(bPos.y * 0.48, 0.25, 9.5);
+        this.camTargetLookAt.set(0.8 + bPos.x * 0.18, focusY, -0.4 + bPos.z * 0.18);
+        this.camTargetSpherical.radius = baseOverviewRadius + THREE.MathUtils.clamp(bPos.y * 0.45, 0, 12.0);
       } else {
-        this.camTargetLookAt.set(0, 0.8, 0);
-        this.camTargetSpherical.radius = 28.5;
+        this.camTargetLookAt.set(0.8, 0.25, -0.4);
+        this.camTargetSpherical.radius = baseOverviewRadius;
       }
     }
 
@@ -1381,7 +1386,7 @@ export class SpaceportSimulation {
 
     this.simTime += dt;
 
-    // 1. Smoothly transition Jelly Flavour optical colors & Studio Storm lighting
+    // 1. Transition Jelly Flavour optical colors & Studio Storm lighting
     const spec = JELLY_FLAVOURS[this.flavour];
     this.currentShallowColor.lerp(new THREE.Color(spec.shallowHex), rawDt * 5);
     this.currentDeepColor.lerp(new THREE.Color(spec.deepHex), rawDt * 5);
@@ -1400,12 +1405,12 @@ export class SpaceportSimulation {
     );
     this.sunLight.intensity = THREE.MathUtils.lerp(
       this.sunLight.intensity,
-      this.storm ? 0.65 : 1.85,
+      this.storm ? 0.65 : 2.05,
       rawDt * 4
     );
     this.causticGlowMat.opacity = THREE.MathUtils.lerp(
       this.causticGlowMat.opacity,
-      this.storm ? 0.08 : 0.24,
+      this.storm ? 0.06 : 0.18,
       rawDt * 4
     );
 
@@ -1422,14 +1427,18 @@ export class SpaceportSimulation {
     this.dioramaGroup.rotation.z = -this.wobbleX * 0.065;
     this.dioramaGroup.rotation.x = this.wobbleZ * 0.065;
 
-    // 3. Update Jelly Uniforms
-    this.jellySurfaceMat.uniforms.uTime.value = this.simTime;
-    this.jellySurfaceMat.uniforms.uStorm.value = THREE.MathUtils.lerp(
+    // 3. Update Jelly & Seabed Uniforms
+    const stormVal = THREE.MathUtils.lerp(
       this.jellySurfaceMat.uniforms.uStorm.value,
       this.storm ? 1.0 : 0.0,
       rawDt * 4
     );
+    this.jellySurfaceMat.uniforms.uTime.value = this.simTime;
+    this.jellySurfaceMat.uniforms.uStorm.value = stormVal;
     this.jellySurfaceMat.uniforms.uWobble.value.set(this.wobbleX, this.wobbleZ);
+
+    this.islandHandles.seabedUniforms.uTime.value = this.simTime;
+    this.islandHandles.seabedUniforms.uStorm.value = stormVal;
 
     for (let i = 0; i < MAX_RIPPLES; i++) {
       const r = this.ripples[i];
@@ -1461,7 +1470,7 @@ export class SpaceportSimulation {
     floatVessel(this.vehicles.tugBoatGroup, this.tugBoatPos, 0.25);
     floatVessel(this.vehicles.fairingBoatGroup, this.fairingBoatPos, -0.35);
 
-    // 5. Update Island Animated Details (Radar, Windsock, Palms, Kelp, Swimmers, Seagulls)
+    // 5. Update Island Animated Details
     if (!this.paused) {
       this.islandHandles.radarDish.rotation.y = this.simTime * 0.85;
       const windNorm = this.windSpeed / 25;
@@ -1501,25 +1510,18 @@ export class SpaceportSimulation {
         g.wingR.rotation.z = -flap;
       });
 
-      // 6. Step Flight & Recovery State Machine + Particle System
       this.updateFlightSequence(dt);
       this.effects.update(dt, this.windSpeed, this.storm);
     }
 
-    // 7. Update Camera & Render
     this.updateCameraFraming(rawDt);
     this.renderer.render(this.scene, this.camera);
 
-    // Emit live telemetry to React UI at ~15 Hz
     if (now - this.lastUiEmit > 66) {
       this.emitTelemetry(false);
       this.lastUiEmit = now;
     }
   };
-
-  // ============================================================================
-  // POINTER & KEYBOARD INTERACTION ("DRAG WATER TO STIR · DRAG SIDE TO TIP · TAP SHIP OR PAD")
-  // ============================================================================
 
   private bindEvents(): void {
     const dom = this.renderer.domElement;
@@ -1546,7 +1548,6 @@ export class SpaceportSimulation {
       const hits = this.raycaster.intersectObjects(this.dioramaGroup.children, true);
 
       if (hits.length > 0) {
-        // Check if user clicked on the jelly water surface or block side wall
         const firstWaterHit = hits.find((h) => h.object.name === 'jelly_water_surface');
         const firstWallHit = hits.find((h) => h.object.name === 'block_side_wall');
 
@@ -1582,11 +1583,10 @@ export class SpaceportSimulation {
         this.camTargetSpherical.theta -= dx * 0.0065;
         this.camTargetSpherical.phi = THREE.MathUtils.clamp(
           this.camTargetSpherical.phi - dy * 0.0055,
-          0.32,
-          1.44
+          0.35,
+          1.42
         );
       } else if (this.dragMode === 'block') {
-        // Tip the block elastically
         this.targetTiltX = THREE.MathUtils.clamp(this.targetTiltX + dx * 0.018, -1.8, 1.8);
         this.targetTiltZ = THREE.MathUtils.clamp(this.targetTiltZ + dy * 0.018, -1.8, 1.8);
       } else if (this.dragMode === 'water') {
@@ -1604,7 +1604,6 @@ export class SpaceportSimulation {
     const onPointerUp = (e: PointerEvent) => {
       const moveDist = Math.hypot(e.clientX - this.pointerDownX, e.clientY - this.pointerDownY);
 
-      // Check for direct click/tap on the Drone Ship or the Landing Pad
       if (moveDist < 6) {
         updateNDC(e.clientX, e.clientY);
         this.raycaster.setFromCamera(this.pointerNDC, this.camera);
@@ -1625,7 +1624,6 @@ export class SpaceportSimulation {
       }
 
       if (this.dragMode === 'block') {
-        // Release the tipped block so it springs back with jelly wobble!
         this.targetTiltX = 0;
         this.targetTiltZ = 0;
         soundEngine.playWobble(0.75, this.firmness);
@@ -1638,8 +1636,8 @@ export class SpaceportSimulation {
       e.preventDefault();
       this.camTargetSpherical.radius = THREE.MathUtils.clamp(
         this.camTargetSpherical.radius + e.deltaY * 0.018,
-        11.0,
-        46.0
+        12.0,
+        58.0
       );
     };
 
@@ -1668,43 +1666,40 @@ export class SpaceportSimulation {
     window.addEventListener('resize', onResize);
   }
 
-  private emitTelemetry(force: boolean): void {
+  private emitTelemetry(_force: boolean): void {
     const phaseLabels: Record<RocketPhase, string> = {
-      in_hangar: 'In hangar · roll out B1',
-      rolling_out: 'Transporter rolling to pad',
-      erecting: 'Strongback raising vertical',
-      on_pad: 'On the pad · ready for count',
-      countdown: `T-${Math.ceil(this.countdownRemaining)}s · Counting down`,
-      hold: 'Hold · range paused',
-      ignition: 'Main engine ignition',
-      liftoff: 'Liftoff · clearing tower',
-      max_q: 'Max Q · supersonic ascent',
-      meco_sep: 'MECO & stage separation',
+      in_hangar: 'In hangar',
+      rolling_out: 'Rolling out',
+      erecting: 'Erecting on pad',
+      on_pad: 'On the pad',
+      countdown: 'Count',
+      hold: 'Hold',
+      ignition: 'Ignition',
+      liftoff: 'Liftoff',
+      max_q: 'Max Q',
+      meco_sep: 'Stage separation',
       boostback_burn: 'Boostback burn',
-      entry_burn: 'Entry burn · decelerating',
+      entry_burn: 'Entry burn',
       grid_fin_glide: 'Grid fins steering',
-      landing_burn: 'Landing burn & legs deploy',
-      landed:
-        this.landingTarget === 'drone_ship'
-          ? 'Landed on drone ship'
-          : 'Landed at Landing Zone 1',
-      tug_recovery: 'Tug towing drone ship to port',
-      crane_offload: 'Port crane lifting booster',
-      refurbishing: 'Refurbishing booster for reuse',
+      landing_burn: 'Landing burn',
+      landed: 'Landed',
+      tug_recovery: 'Under tow',
+      crane_offload: 'Crane lift',
+      refurbishing: 'Refurbishing',
     };
 
-    let clockDisplay = 'T-00:10';
+    let clockDisplay = 'T-10';
     if (this.phase === 'countdown' || this.phase === 'hold') {
-      const s = String(Math.ceil(this.countdownRemaining)).padStart(2, '0');
-      clockDisplay = `T-00:${s}`;
+      const s = Math.ceil(this.countdownRemaining);
+      clockDisplay = `T-${s}`;
     } else if (
       this.phase !== 'in_hangar' &&
       this.phase !== 'rolling_out' &&
       this.phase !== 'erecting' &&
       this.phase !== 'on_pad'
     ) {
-      const flightSec = Math.min(99, Math.floor(this.phaseElapsed + 12));
-      clockDisplay = `T+00:${String(flightSec).padStart(2, '0')}`;
+      const flightSec = Math.min(99, Math.floor(this.phaseElapsed + 8));
+      clockDisplay = `T+${flightSec}`;
     }
 
     this.onTelemetryCallback({
