@@ -1,4 +1,9 @@
-import * as THREE from 'three';
+export const BLOCK_HALF_SIZE = 11.0;
+export const BLOCK_HALF_X = 11.0;
+export const BLOCK_HALF_Z = 11.0;
+export const BLOCK_BOTTOM_Y = -2.25;
+export const WATER_LEVEL = 1.55;
+export const MAX_RIPPLES = 8;
 
 export interface RippleImpulse {
   x: number;
@@ -7,54 +12,55 @@ export interface RippleImpulse {
   strength: number;
 }
 
-export const MAX_RIPPLES = 10;
-export const WATER_LEVEL = 1.55;
-export const BLOCK_HALF_SIZE = 11.0;
-export const BLOCK_BOTTOM_Y = -2.25;
-
 /**
- * Evaluates the exact terrain height of the island/seabed at world (x, z)
- * Block spans x in [-11, 11], z in [-11, 11].
+ * Shared terrain & seabed elevation profile matching the reference diorama:
+ * - Main spaceport landmass across the rear (z < -1.8)
+ * - Curved sandy spit/peninsula extending forward along the left edge (x < -6.8, forward to z ~ +4.6)
+ * - Harbour concrete quay shelf on the right (x > 2.4, z < -0.6)
+ * - Smooth, gradual lagoon seabed slope from the beach down toward the front-right deep corner
  */
 export function evaluateSeabedHeight(x: number, z: number): number {
-  const inHarbourQuay = x > 2.0 && x < 9.4 && z < -1.15 && z > -4.8;
-  const inHarbourWater = x > 1.8 && z >= -1.15 && z < 3.5;
+  const coastCurve =
+    -1.85 +
+    Math.sin(x * 0.24 + 0.5) * 0.68 +
+    Math.cos(x * 0.45) * 0.28;
 
-  const curveZ = -1.6 + 1.15 * Math.sin(x * 0.22 + 0.4) - (x > 1.5 ? 0.55 : 0);
-  const northMask = THREE.MathUtils.smoothstep(-z, -curveZ - 1.8, -curveZ + 1.3);
+  // Left peninsula spit extending along x near -11.0 forward to z ~ +4.6
+  const leftSpitInfluence =
+    Math.max(0, 1 - (x + BLOCK_HALF_SIZE) / 4.8) *
+    Math.max(0, 1 - Math.max(0, z - 4.4) / 5.6);
+  const effectiveCoastZ = coastCurve + leftSpitInfluence * 5.8;
 
-  const spitCurveX = -3.8 + 0.9 * Math.cos(z * 0.28);
-  const westSpitMask =
-    THREE.MathUtils.smoothstep(-x, -spitCurveX - 1.6, -spitCurveX + 1.4) *
-    THREE.MathUtils.smoothstep(-z, -5.2, -1.2);
-
-  let landMask = Math.min(1.0, Math.max(northMask, westSpitMask * 0.94));
-  if (inHarbourQuay) {
-    landMask = Math.max(landMask, 0.96);
+  // Harbour industrial concrete shelf on the right
+  if (x > 2.4 && z < -0.6 && z > -4.6) {
+    return 1.88;
   }
 
-  const dunes =
-    0.055 * Math.sin(x * 0.45 + 0.3) * Math.cos(z * 0.42) +
-    0.03 * Math.cos(x * 0.9 - z * 0.8);
-
-  const distFromShore = Math.max(0, (z - curveZ) * 0.55 + (x + 3.5) * 0.22);
-  const basinDepth = THREE.MathUtils.smoothstep(distFromShore, 0, 11.5);
-
-  let height = THREE.MathUtils.lerp(-0.15 - basinDepth * 1.25, 2.04, landMask) + dunes * landMask;
-
-  if (landMask < 0.45) {
-    const sandRipples =
-      0.04 * Math.sin(x * 1.1 + z * 0.95) +
-      0.025 * Math.cos(x * 2.3 - z * 1.8);
-    height += sandRipples * (1.0 - landMask);
+  const distFromShore = z - effectiveCoastZ;
+  if (distFromShore <= 0) {
+    const inlandT = Math.min(1, -distFromShore / 2.4);
+    const undulation =
+      Math.sin(x * 0.30) * Math.cos(z * 0.34) * 0.065 +
+      Math.sin((x - z) * 0.52) * 0.025;
+    return 1.62 + inlandT * 0.32 + undulation * (0.35 + 0.65 * inlandT);
   }
 
-  if (inHarbourWater) {
-    const quayDrop = THREE.MathUtils.smoothstep(z, -1.25, -0.75);
-    height = THREE.MathUtils.lerp(height, Math.min(height, -0.75), quayDrop);
-  }
+  // Smooth beach slope into shallow shelf and then gradual deep lagoon slope
+  const shallowDrop = 1.0 - Math.exp(-distFromShore * 0.42);
+  const crossSlope = ((x + BLOCK_HALF_SIZE) / (2 * BLOCK_HALF_SIZE)) * 0.66;
+  const forwardSlope = Math.max(0, (z + 1.8) / 12.8) * 0.74;
+  const ripples =
+    Math.sin(x * 0.48 + z * 0.38) * 0.048 +
+    Math.cos(x * 0.88 - z * 0.68) * 0.026;
 
-  return height;
+  const rawSeabed =
+    1.58 -
+    shallowDrop * 1.26 -
+    forwardSlope * 0.82 -
+    crossSlope * (0.26 + 0.74 * Math.min(1, distFromShore / 3.8)) +
+    ripples;
+
+  return Math.max(-1.35, Math.min(1.62, rawSeabed));
 }
 
 export function evaluateJellySurface(
@@ -68,347 +74,326 @@ export function evaluateJellySurface(
   wobbleX: number,
   wobbleZ: number
 ): { y: number; nx: number; nz: number } {
-  const windFactor = 0.28 + (windSpeed / 25) * 1.15 + (storm ? 0.85 : 0);
-  const dampFactor = 1.12 - (damping / 100) * 0.52;
-  const amp = 0.048 * windFactor * dampFactor;
+  const sampleH = (sx: number, sz: number): number => {
+    const stormBoost = storm ? 1.85 : 1.0;
+    const windAmp = (0.016 + (windSpeed / 25) * 0.068) * stormBoost;
 
-  const p1 = x * 0.68 + z * 0.52 - time * 2.35;
-  const p2 = x * -0.48 + z * 0.78 - time * 1.85;
-  const p3 = x * 1.05 - z * 0.36 - time * 3.1;
+    let h =
+      Math.sin(sx * 0.48 + time * 2.05) * windAmp +
+      Math.cos(sz * 0.54 - time * 1.75) * windAmp * 0.82 +
+      Math.sin((sx + sz) * 0.36 + time * 2.55) * windAmp * 0.52 +
+      Math.cos((sx * 0.7 - sz * 0.5) + time * 3.1) * windAmp * 0.28;
 
-  let dy =
-    Math.sin(p1) * amp +
-    Math.sin(p2) * (amp * 0.65) +
-    Math.cos(p3) * (amp * 0.35);
+    h += (sx * wobbleX + sz * wobbleZ) * 0.026;
 
-  let ddx =
-    Math.cos(p1) * 0.68 * amp +
-    Math.cos(p2) * -0.48 * (amp * 0.65) -
-    Math.sin(p3) * 1.05 * (amp * 0.35);
-
-  let ddz =
-    Math.cos(p1) * 0.52 * amp +
-    Math.cos(p2) * 0.78 * (amp * 0.65) +
-    Math.sin(p3) * 0.36 * (amp * 0.35);
-
-  for (let i = 0; i < ripples.length; i++) {
-    const r = ripples[i];
-    const age = time - r.time;
-    if (age >= 0 && age < 4.5 && r.strength > 0.001) {
-      const dx = x - r.x;
-      const dz = z - r.z;
-      const dist = Math.sqrt(dx * dx + dz * dz) + 0.001;
-      const wavePhase = dist * 3.1 - age * 7.8;
-      const envelope = Math.exp(-age * (1.1 + (damping / 100) * 1.2)) * Math.exp(-dist * 0.22);
-      const rAmp = r.strength * 0.22 * envelope;
-      const s = Math.sin(wavePhase) * rAmp;
-      const c = Math.cos(wavePhase) * 3.1 * rAmp;
-      dy += s;
-      ddx += c * (dx / dist);
-      ddz += c * (dz / dist);
+    const dampRate = 0.65 + (damping / 100) * 1.85;
+    for (let i = 0; i < ripples.length; i++) {
+      const r = ripples[i];
+      const age = time - r.time;
+      if (age >= 0 && age < 6.0 && r.strength > 0.001) {
+        const dist = Math.hypot(sx - r.x, sz - r.z);
+        const front = age * 4.4;
+        const env = Math.exp(-age * dampRate) * Math.exp(-Math.abs(dist - front) * 0.62);
+        h += Math.sin(dist * 3.2 - age * 11.5) * r.strength * 0.16 * env;
+      }
     }
-  }
 
-  dy += (x * wobbleX + z * wobbleZ) * 0.042;
-  ddx += wobbleX * 0.042;
-  ddz += wobbleZ * 0.042;
+    return WATER_LEVEL + h;
+  };
+
+  const eps = 0.18;
+  const hc = sampleH(x, z);
+  const hx = sampleH(x + eps, z);
+  const hz = sampleH(x, z + eps);
 
   return {
-    y: WATER_LEVEL + dy,
-    nx: -ddx,
-    nz: -ddz,
+    y: hc,
+    nx: -(hx - hc) / eps,
+    nz: -(hz - hc) / eps,
   };
 }
 
-export const JELLY_SURFACE_VERTEX = /* glsl */ `
-  uniform float uTime;
-  uniform float uWindSpeed;
-  uniform float uStorm;
-  uniform float uDamping;
-  uniform vec2 uWobble;
-  uniform vec4 uRipples[${MAX_RIPPLES}];
+const JELLY_SHARED_GLSL = /* glsl */ `
+uniform float uTime;
+uniform float uWindSpeed;
+uniform float uStorm;
+uniform float uDamping;
+uniform vec2 uWobble;
+uniform vec4 uRipples[8];
+uniform vec3 uShallowColor;
+uniform vec3 uDeepColor;
+uniform vec3 uCausticColor;
+uniform vec3 uSpecularColor;
+uniform vec3 uSunDir;
+uniform vec3 uRocketLightPos;
+uniform float uRocketLightIntensity;
 
-  varying vec3 vWorldPos;
-  varying vec3 vLocalPos;
-  varying vec3 vNormal;
-  varying float vWaveHeight;
-  varying float vRippleFoam;
+float seabedHeightAt(vec2 xz) {
+  float coastCurve =
+    -1.85 +
+    sin(xz.x * 0.24 + 0.5) * 0.68 +
+    cos(xz.x * 0.45) * 0.28;
 
-  void main() {
-    vec3 pos = position;
-    float windFactor = 0.28 + (uWindSpeed / 25.0) * 1.15 + uStorm * 0.85;
-    float dampFactor = 1.12 - (uDamping / 100.0) * 0.52;
-    float amp = 0.05 * windFactor * dampFactor;
+  float leftSpitInfluence =
+    clamp(1.0 - (xz.x + 11.0) / 4.8, 0.0, 1.0) *
+    clamp(1.0 - max(0.0, xz.y - 4.4) / 5.6, 0.0, 1.0);
+  float effectiveCoastZ = coastCurve + leftSpitInfluence * 5.8;
 
-    float p1 = pos.x * 0.68 + pos.z * 0.52 - uTime * 2.35;
-    float p2 = pos.x * -0.48 + pos.z * 0.78 - uTime * 1.85;
-    float p3 = pos.x * 1.05 - pos.z * 0.36 - uTime * 3.10;
-    float p4 = pos.x * 2.15 + pos.z * 1.85 + uTime * 4.40;
-    float p5 = pos.x * -2.60 + pos.z * 2.10 - uTime * 3.80;
-
-    float dy =
-      sin(p1) * amp +
-      sin(p2) * (amp * 0.65) +
-      cos(p3) * (amp * 0.35) +
-      sin(p4) * (amp * 0.14) +
-      cos(p5) * (amp * 0.10);
-
-    float ddx =
-      cos(p1) * 0.68 * amp +
-      cos(p2) * -0.48 * (amp * 0.65) -
-      sin(p3) * 1.05 * (amp * 0.35) +
-      cos(p4) * 2.15 * (amp * 0.14) +
-      sin(p5) * 2.60 * (amp * 0.10);
-
-    float ddz =
-      cos(p1) * 0.52 * amp +
-      cos(p2) * 0.78 * (amp * 0.65) +
-      sin(p3) * 0.36 * (amp * 0.35) +
-      cos(p4) * 1.85 * (amp * 0.14) -
-      sin(p5) * 2.10 * (amp * 0.10);
-
-    float rippleEnergy = 0.0;
-    for (int i = 0; i < ${MAX_RIPPLES}; i++) {
-      vec4 rip = uRipples[i];
-      float age = uTime - rip.z;
-      if (age >= 0.0 && age < 4.5 && rip.w > 0.001) {
-        vec2 d = pos.xz - rip.xy;
-        float dist = length(d) + 0.001;
-        float phase = dist * 3.1 - age * 7.8;
-        float env = exp(-age * (1.1 + (uDamping / 100.0) * 1.2)) * exp(-dist * 0.22);
-        float rAmp = rip.w * 0.22 * env;
-        dy += sin(phase) * rAmp;
-        float deriv = cos(phase) * 3.1 * rAmp;
-        ddx += deriv * (d.x / dist);
-        ddz += deriv * (d.y / dist);
-        rippleEnergy += abs(sin(phase)) * env * rip.w;
-      }
-    }
-
-    dy += (pos.x * uWobble.x + pos.z * uWobble.y) * 0.042;
-    pos.y += dy;
-
-    vec3 computedNormal = normalize(vec3(-ddx * 2.4, 1.0, -ddz * 2.4));
-    vLocalPos = pos;
-    vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
-    vWorldPos = worldPosition.xyz;
-    vNormal = normalize(mat3(modelMatrix) * computedNormal);
-    vWaveHeight = dy;
-    vRippleFoam = clamp(rippleEnergy * 1.35, 0.0, 1.0);
-
-    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+  if (xz.x > 2.4 && xz.y < -0.6 && xz.y > -4.6) {
+    return 1.88;
   }
+
+  float distFromShore = xz.y - effectiveCoastZ;
+  if (distFromShore <= 0.0) {
+    float inlandT = clamp(-distFromShore / 2.4, 0.0, 1.0);
+    float undulation =
+      sin(xz.x * 0.30) * cos(xz.y * 0.34) * 0.065 +
+      sin((xz.x - xz.y) * 0.52) * 0.025;
+    return 1.62 + inlandT * 0.32 + undulation * (0.35 + 0.65 * inlandT);
+  }
+
+  float shallowDrop = 1.0 - exp(-distFromShore * 0.42);
+  float crossSlope = ((xz.x + 11.0) / 22.0) * 0.66;
+  float forwardSlope = max(0.0, (xz.y + 1.8) / 12.8) * 0.74;
+  float ripples =
+    sin(xz.x * 0.48 + xz.y * 0.38) * 0.048 +
+    cos(xz.x * 0.88 - xz.y * 0.68) * 0.026;
+
+  float rawSeabed =
+    1.58 -
+    shallowDrop * 1.26 -
+    forwardSlope * 0.82 -
+    crossSlope * (0.26 + 0.74 * clamp(distFromShore / 3.8, 0.0, 1.0)) +
+    ripples;
+
+  return clamp(rawSeabed, -1.35, 1.62);
+}
+
+float jellyWaveAt(vec2 xz) {
+  float stormBoost = mix(1.0, 1.85, uStorm);
+  float windAmp = (0.016 + (uWindSpeed / 25.0) * 0.068) * stormBoost;
+
+  float h =
+    sin(xz.x * 0.48 + uTime * 2.05) * windAmp +
+    cos(xz.y * 0.54 - uTime * 1.75) * windAmp * 0.82 +
+    sin((xz.x + xz.y) * 0.36 + uTime * 2.55) * windAmp * 0.52 +
+    cos((xz.x * 0.7 - xz.y * 0.5) + uTime * 3.1) * windAmp * 0.28;
+
+  h += (xz.x * uWobble.x + xz.y * uWobble.y) * 0.026;
+
+  float dampRate = 0.65 + (uDamping / 100.0) * 1.85;
+  for (int i = 0; i < 8; i++) {
+    vec4 r = uRipples[i];
+    float age = uTime - r.z;
+    if (age >= 0.0 && age < 6.0 && r.w > 0.001) {
+      float dist = length(xz - r.xy);
+      float front = age * 4.4;
+      float env = exp(-age * dampRate) * exp(-abs(dist - front) * 0.62);
+      h += sin(dist * 3.2 - age * 11.5) * r.w * 0.16 * env;
+    }
+  }
+
+  return 1.55 + h;
+}
+`;
+
+export const JELLY_SURFACE_VERTEX = /* glsl */ `
+${JELLY_SHARED_GLSL}
+
+varying vec3 vWorldPos;
+varying vec3 vWorldNormal;
+varying float vSeabedY;
+varying vec2 vUv;
+
+void main() {
+  vUv = uv;
+  vec3 pos = position;
+
+  float eps = 0.16;
+  float hc = jellyWaveAt(pos.xz);
+  float hx = jellyWaveAt(pos.xz + vec2(eps, 0.0));
+  float hz = jellyWaveAt(pos.xz + vec2(0.0, eps));
+
+  pos.y = hc;
+  pos.x += uWobble.x * 0.14;
+  pos.z += uWobble.y * 0.14;
+
+  vec3 n = normalize(vec3(-(hx - hc) / eps, 1.0, -(hz - hc) / eps));
+  vSeabedY = seabedHeightAt(position.xz);
+
+  vec4 worldPos = modelMatrix * vec4(pos, 1.0);
+  vWorldPos = worldPos.xyz;
+  vWorldNormal = normalize(mat3(modelMatrix) * n);
+
+  gl_Position = projectionMatrix * viewMatrix * worldPos;
+}
 `;
 
 export const JELLY_SURFACE_FRAGMENT = /* glsl */ `
-  uniform float uTime;
-  uniform vec3 uShallowColor;
-  uniform vec3 uDeepColor;
-  uniform vec3 uCausticColor;
-  uniform vec3 uSpecularColor;
-  uniform vec3 uSunDir;
-  uniform float uStorm;
-  uniform vec3 uRocketLightPos;
-  uniform float uRocketLightIntensity;
+${JELLY_SHARED_GLSL}
 
-  varying vec3 vWorldPos;
-  varying vec3 vLocalPos;
-  varying vec3 vNormal;
-  varying float vWaveHeight;
-  varying float vRippleFoam;
+varying vec3 vWorldPos;
+varying vec3 vWorldNormal;
+varying float vSeabedY;
+varying vec2 vUv;
 
-  float evaluateBed(vec2 xz) {
-    bool inHarbourQuay = xz.x > 2.0 && xz.x < 9.4 && xz.y < -1.15 && xz.y > -4.8;
-    bool inHarbourWater = xz.x > 1.8 && xz.y >= -1.15 && xz.y < 3.5;
-
-    float curveZ = -1.6 + 1.15 * sin(xz.x * 0.22 + 0.4) - (xz.x > 1.5 ? 0.55 : 0.0);
-    float northMask = smoothstep(-curveZ - 1.8, -curveZ + 1.3, -xz.y);
-    float spitCurveX = -3.8 + 0.9 * cos(xz.y * 0.28);
-    float westSpitMask =
-      smoothstep(-spitCurveX - 1.6, -spitCurveX + 1.4, -xz.x) *
-      smoothstep(-5.2, -1.2, -xz.y);
-
-    float landMask = min(1.0, max(northMask, westSpitMask * 0.94));
-    if (inHarbourQuay) landMask = max(landMask, 0.96);
-
-    float distFromShore = max(0.0, (xz.y - curveZ) * 0.55 + (xz.x + 3.5) * 0.22);
-    float basinDepth = smoothstep(0.0, 11.5, distFromShore);
-    float h = mix(-0.15 - basinDepth * 1.25, 2.04, landMask);
-
-    if (inHarbourWater) {
-      float quayDrop = smoothstep(-1.25, -0.75, xz.y);
-      h = mix(h, min(h, -0.75), quayDrop);
-    }
-    return h;
+void main() {
+  float waterDepth = vWorldPos.y - vSeabedY;
+  if (waterDepth < -0.015) {
+    discard;
   }
 
-  void main() {
-    float bedY = evaluateBed(vLocalPos.xz);
-    float waterDepth = (1.55 + vWaveHeight) - bedY;
+  vec2 p = vWorldPos.xz;
+  vec3 V = normalize(cameraPosition - vWorldPos);
+  vec3 L = normalize(uSunDir);
 
-    if (waterDepth <= 0.002) {
-      discard;
-    }
+  // Subtle glossy micro-facets on the top gel surface
+  float nX =
+    cos(p.x * 1.45 + p.y * 0.95 + uTime * 2.1) * 0.016 +
+    sin(p.x * 2.7 - p.y * 2.2 - uTime * 1.6) * 0.009;
+  float nZ =
+    sin(p.y * 1.55 - p.x * 0.85 - uTime * 1.8) * 0.016 +
+    cos(p.x * 2.4 + p.y * 2.6 + uTime * 2.3) * 0.009;
+  vec3 N = normalize(vWorldNormal + vec3(nX, 0.0, nZ));
+  vec3 H = normalize(L + V);
 
-    // Multi-frequency normal perturbation so the top surface of the jelly sparkles with realistic wave facets
-    vec2 p = vLocalPos.xz;
-    float w1 = sin(p.x * 3.4 + p.y * 2.8 - uTime * 3.2) * cos(p.x * -2.1 + p.y * 3.7 - uTime * 2.4);
-    float w2 = sin(p.x * 7.2 - p.y * 5.6 + uTime * 4.5) * 0.5;
-    vec3 N = normalize(vNormal + vec3((w1 + w2) * 0.14, 0.0, (w1 - w2) * 0.14));
+  float NdotV = max(dot(N, V), 0.001);
+  float fresnel = 0.03 + 0.97 * pow(1.0 - NdotV, 4.2);
 
-    vec3 V = normalize(cameraPosition - vWorldPos);
-    vec3 L = normalize(uSunDir);
+  float depthNorm = clamp(waterDepth / 2.75, 0.0, 1.0);
+  vec3 bodyColor = mix(uShallowColor, uDeepColor, pow(depthNorm, 0.78));
 
-    float depthFactor = clamp(waterDepth / 3.0, 0.0, 1.0);
-    vec3 gelTint = mix(uShallowColor, uDeepColor, pow(depthFactor, 0.7));
+  // Studio sky reflection & crisp specular glints
+  vec3 skyReflect = mix(vec3(0.92, 0.98, 0.96), vec3(1.0), clamp(N.y, 0.0, 1.0));
+  float specTight = pow(max(dot(N, H), 0.0), 190.0) * 0.85;
+  float specBroad = pow(max(dot(N, H), 0.0), 28.0) * 0.14;
 
-    float fresnel = pow(1.0 - max(dot(N, V), 0.0), 2.6);
-    vec3 skyReflect = mix(vec3(0.97, 0.99, 1.0), vec3(0.32, 0.38, 0.48), uStorm);
+  // Shoreline foam ribbon where jelly meets sand beach or harbour quay
+  float shoreFoam = smoothstep(0.24, 0.0, waterDepth) * (0.46 + 0.16 * sin(p.x * 2.4 + uTime * 3.0));
 
-    vec3 H1 = normalize(L + V);
-    float sunSpec = pow(max(dot(N, H1), 0.0), 90.0) * (0.95 - uStorm * 0.45);
-    float facetGlint = smoothstep(0.22, 0.68, w1 + w2 * 0.6) * 0.28 * (1.0 - uStorm * 0.5);
+  // Parallel white wave crest lines rolling gently near the harbour/beach (matching reference video)
+  float wavePhase = fract(p.y * 0.38 + uTime * 0.30 + sin(p.x * 0.18) * 0.10);
+  float crestLine =
+    smoothstep(0.026, 0.0, abs(wavePhase - 0.5)) *
+    smoothstep(0.25, 1.1, waterDepth) *
+    smoothstep(6.2, -1.5, p.y) *
+    smoothstep(-1.5, 4.2, p.x) * 0.36;
 
-    float shoreLine = smoothstep(0.18, 0.015, waterDepth) * smoothstep(0.0, 0.02, waterDepth);
-    float crestWhitecap = smoothstep(0.055, 0.11, vWaveHeight) * 0.35 + vRippleFoam * 0.55;
-    float foam = clamp(shoreLine * 0.85 + crestWhitecap + facetGlint * 0.5, 0.0, 0.92);
+  // Crisp white refractive rim line around the cut edges of the jelly cube
+  float edgeDist = 11.0 - max(abs(p.x), abs(p.y));
+  float rimLine = smoothstep(0.18, 0.0, edgeDist) * 0.82 + smoothstep(0.50, 0.0, edgeDist) * 0.16;
 
-    float edgeDistX = 11.0 - abs(vLocalPos.x);
-    float edgeDistZ = 11.0 - abs(vLocalPos.z);
-    float outerEdgeDist = min(edgeDistX, edgeDistZ);
-    float cubeRimLine = smoothstep(0.11, 0.0, outerEdgeDist) * 0.95;
+  // Rocket exhaust glow on the water during ignition/landing
+  float rocketDist = length(vWorldPos - uRocketLightPos);
+  vec3 rocketGlow = vec3(1.0, 0.58, 0.2) * (uRocketLightIntensity / (1.0 + rocketDist * rocketDist * 0.18));
 
-    vec3 toRocket = uRocketLightPos - vWorldPos;
-    float rDist = length(toRocket);
-    vec3 rDir = toRocket / (rDist + 0.001);
-    float rSpec = pow(max(dot(N, normalize(rDir + V)), 0.0), 42.0) * uRocketLightIntensity * (16.0 / (1.0 + rDist * rDist * 0.14));
+  vec3 finalColor = mix(bodyColor, skyReflect, fresnel * 0.42);
+  finalColor += uSpecularColor * (specTight + specBroad) + rocketGlow * 0.35;
+  finalColor = mix(finalColor, vec3(0.98, 1.0, 0.99), clamp(shoreFoam + crestLine + rimLine, 0.0, 0.92));
 
-    vec3 color = mix(gelTint, skyReflect, fresnel * 0.58 + facetGlint);
-    color = mix(color, vec3(0.99, 1.0, 1.0), max(foam, cubeRimLine));
-    color += uSpecularColor * sunSpec;
-    color += vec3(1.0, 0.58, 0.18) * rSpec;
-
-    float baseAlpha = mix(0.18, 0.34, depthFactor) * smoothstep(0.0, 0.04, waterDepth);
-    float alpha = clamp(baseAlpha + fresnel * 0.28 + facetGlint * 0.35 + foam * 0.65 + cubeRimLine * 0.82 + sunSpec * 0.6, 0.0, 0.96);
-
-    gl_FragColor = vec4(color, alpha);
+  if (uStorm > 0.01) {
+    finalColor = mix(finalColor, finalColor * vec3(0.55, 0.66, 0.78), uStorm * 0.5);
   }
+
+  // Crystal-clear top surface so the sunlit mint seabed, corals, sharks, and underwater shadows shine through clearly
+  float alpha = clamp(
+    0.11 + depthNorm * 0.07 + fresnel * 0.20 + shoreFoam * 0.30 + crestLine * 0.26 + rimLine * 0.56 + specTight * 0.38,
+    0.11,
+    0.84
+  );
+  gl_FragColor = vec4(finalColor, alpha);
+}
 `;
 
 export const JELLY_WALL_VERTEX = /* glsl */ `
-  uniform float uTime;
-  uniform float uWindSpeed;
-  uniform float uStorm;
-  uniform float uDamping;
-  uniform vec2 uWobble;
-  uniform vec4 uRipples[${MAX_RIPPLES}];
+${JELLY_SHARED_GLSL}
 
-  varying vec3 vLocalPos;
-  varying vec3 vWorldPos;
-  varying vec3 vNormal;
-  varying float vTopWaveY;
+varying vec3 vWorldPos;
+varying vec3 vWorldNormal;
+varying float vHeightFrac;
+varying float vWaterColumn;
+varying vec2 vUv;
 
-  void main() {
-    vec3 pos = position;
-    float windFactor = 0.28 + (uWindSpeed / 25.0) * 1.15 + uStorm * 0.85;
-    float dampFactor = 1.12 - (uDamping / 100.0) * 0.52;
-    float amp = 0.05 * windFactor * dampFactor;
+void main() {
+  vUv = uv;
+  vec3 pos = position;
 
-    float p1 = pos.x * 0.68 + pos.z * 0.52 - uTime * 2.35;
-    float p2 = pos.x * -0.48 + pos.z * 0.78 - uTime * 1.85;
-    float p3 = pos.x * 1.05 - pos.z * 0.36 - uTime * 3.10;
-    float dy = sin(p1) * amp + sin(p2) * (amp * 0.65) + cos(p3) * (amp * 0.35);
+  float topFactor = clamp(uv.y, 0.0, 1.0);
+  float topY = jellyWaveAt(pos.xz);
+  // Bottom of the jelly wall tracks the sloped seabed so the limestone cross-section below is unobstructed
+  float seabedY = clamp(seabedHeightAt(pos.xz), -1.95, topY + 0.08);
 
-    for (int i = 0; i < ${MAX_RIPPLES}; i++) {
-      vec4 rip = uRipples[i];
-      float age = uTime - rip.z;
-      if (age >= 0.0 && age < 4.5 && rip.w > 0.001) {
-        vec2 d = pos.xz - rip.xy;
-        float dist = length(d) + 0.001;
-        float phase = dist * 3.1 - age * 7.8;
-        float env = exp(-age * (1.1 + (uDamping / 100.0) * 1.2)) * exp(-dist * 0.22);
-        dy += sin(phase) * rip.w * 0.22 * env;
-      }
-    }
+  vHeightFrac = topFactor;
+  vWaterColumn = max(0.0, topY - seabedY);
 
-    dy += (pos.x * uWobble.x + pos.z * uWobble.y) * 0.042;
+  pos.y = mix(seabedY, topY, topFactor);
+  pos.x += uWobble.x * 0.14 * topFactor;
+  pos.z += uWobble.y * 0.14 * topFactor;
 
-    float heightNorm = clamp((pos.y - (-1.6)) / (1.55 - (-1.6)), 0.0, 1.0);
-    pos.y += dy * heightNorm;
+  vec4 worldPos = modelMatrix * vec4(pos, 1.0);
+  vWorldPos = worldPos.xyz;
+  vWorldNormal = normalize(mat3(modelMatrix) * normal);
 
-    pos.x += uWobble.x * heightNorm * 0.22;
-    pos.z += uWobble.y * heightNorm * 0.22;
-
-    vLocalPos = pos;
-    vTopWaveY = 1.55 + dy;
-    vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
-    vWorldPos = worldPosition.xyz;
-    vNormal = normalize(mat3(modelMatrix) * normal);
-    gl_Position = projectionMatrix * viewMatrix * worldPosition;
-  }
+  gl_Position = projectionMatrix * viewMatrix * worldPos;
+}
 `;
 
 export const JELLY_WALL_FRAGMENT = /* glsl */ `
-  uniform float uTime;
-  uniform vec3 uShallowColor;
-  uniform vec3 uDeepColor;
-  uniform vec3 uCausticColor;
-  uniform vec3 uSpecularColor;
-  uniform float uStorm;
+${JELLY_SHARED_GLSL}
 
-  varying vec3 vLocalPos;
-  varying vec3 vWorldPos;
-  varying vec3 vNormal;
-  varying float vTopWaveY;
+varying vec3 vWorldPos;
+varying vec3 vWorldNormal;
+varying float vHeightFrac;
+varying float vWaterColumn;
+varying vec2 vUv;
 
-  float evaluateBed(vec2 xz) {
-    bool inHarbourQuay = xz.x > 2.0 && xz.x < 9.4 && xz.y < -1.15 && xz.y > -4.8;
-    bool inHarbourWater = xz.x > 1.8 && xz.y >= -1.15 && xz.y < 3.5;
-
-    float curveZ = -1.6 + 1.15 * sin(xz.x * 0.22 + 0.4) - (xz.x > 1.5 ? 0.55 : 0.0);
-    float northMask = smoothstep(-curveZ - 1.8, -curveZ + 1.3, -xz.y);
-    float spitCurveX = -3.8 + 0.9 * cos(xz.y * 0.28);
-    float westSpitMask =
-      smoothstep(-spitCurveX - 1.6, -spitCurveX + 1.4, -xz.x) *
-      smoothstep(-5.2, -1.2, -xz.y);
-
-    float landMask = min(1.0, max(northMask, westSpitMask * 0.94));
-    if (inHarbourQuay) landMask = max(landMask, 0.96);
-
-    float distFromShore = max(0.0, (xz.y - curveZ) * 0.55 + (xz.x + 3.5) * 0.22);
-    float basinDepth = smoothstep(0.0, 11.5, distFromShore);
-    float h = mix(-0.15 - basinDepth * 1.25, 2.04, landMask);
-
-    if (inHarbourWater) {
-      float quayDrop = smoothstep(-1.25, -0.75, xz.y);
-      h = mix(h, min(h, -0.75), quayDrop);
-    }
-    return h;
+void main() {
+  if (vWaterColumn < 0.03) {
+    discard;
   }
 
-  void main() {
-    float bedY = evaluateBed(vLocalPos.xz);
-    if (vLocalPos.y < bedY - 0.015 || vLocalPos.y > vTopWaveY + 0.03) {
-      discard;
-    }
+  vec3 N = normalize(vWorldNormal);
+  vec3 V = normalize(cameraPosition - vWorldPos);
+  vec3 L = normalize(uSunDir);
+  vec3 H = normalize(L + V);
 
-    float depthFromTop = clamp((vTopWaveY - vLocalPos.y) / 3.0, 0.0, 1.0);
-    vec3 V = normalize(cameraPosition - vWorldPos);
-    vec3 N = normalize(vNormal);
+  float NdotV = max(abs(dot(N, V)), 0.001);
+  float fresnel = 0.05 + 0.95 * pow(1.0 - NdotV, 3.2);
 
-    vec3 col = mix(uShallowColor, uDeepColor, pow(depthFromTop, 0.72));
+  // Smooth depth gradient inside the vertical cut jelly wall
+  float depthRatio = clamp(1.0 - vHeightFrac, 0.0, 1.0);
+  vec3 wallColor = mix(uShallowColor * 1.04, uDeepColor * 0.90, pow(depthRatio, 0.85));
 
-    float topRim = smoothstep(0.085, 0.0, abs(vTopWaveY - vLocalPos.y));
-    float bedRim = smoothstep(0.065, 0.0, abs(vLocalPos.y - bedY));
-    float cornerDist = min(11.0 - abs(vLocalPos.x), 11.0 - abs(vLocalPos.z));
-    float cornerLine = smoothstep(0.11, 0.0, cornerDist);
+  // Rich emerald-teal refractive meniscus band right where the jelly sits on the sloped limestone seabed
+  float seabedContactBand = smoothstep(0.16, 0.0, vHeightFrac);
+  vec3 seabedRimColor = uDeepColor * vec3(0.42, 0.68, 0.56);
+  wallColor = mix(wallColor, seabedRimColor, seabedContactBand * 0.68);
 
-    float fresnel = pow(1.0 - max(dot(N, V), 0.0), 2.5);
-    float edgeHighlight = max(topRim * 0.95, max(cornerLine * 0.9, bedRim * 0.55));
-    col = mix(col, vec3(0.99, 1.0, 1.0), edgeHighlight);
-    col += uSpecularColor * fresnel * 0.28;
+  // Subtle vertical internal light shafts inside the cut block face
+  float coord = abs(N.x) > 0.5 ? vWorldPos.z : vWorldPos.x;
+  float lightShaft = 0.5 + 0.5 * sin(coord * 0.85 + uTime * 1.4);
+  wallColor += uCausticColor * lightShaft * vHeightFrac * 0.08;
 
-    float alpha = mix(0.28, 0.46, depthFromTop) + edgeHighlight * 0.48 + fresnel * 0.14;
-    gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.94));
+  // Specular sheen on the cut jelly face
+  float spec = pow(max(dot(N, H), 0.0), 96.0) * 0.42;
+  wallColor += uSpecularColor * spec;
+
+  // Crisp white top wave meniscus & vertical corner edge lines
+  float topEdge = smoothstep(0.955, 1.0, vHeightFrac);
+  float sideCorner = smoothstep(0.016, 0.0, min(vUv.x, 1.0 - vUv.x));
+  float rimHighlight = clamp(topEdge * 0.82 + sideCorner * 0.72, 0.0, 1.0);
+
+  wallColor = mix(wallColor, vec3(0.98, 1.0, 0.99), rimHighlight * 0.86);
+
+  if (uStorm > 0.01) {
+    wallColor = mix(wallColor, wallColor * vec3(0.55, 0.66, 0.78), uStorm * 0.5);
   }
+
+  float alpha = clamp(
+    0.34 + depthRatio * 0.16 + seabedContactBand * 0.24 + fresnel * 0.18 + rimHighlight * 0.42,
+    0.32,
+    0.88
+  );
+  gl_FragColor = vec4(wallColor, alpha);
+}
 `;
