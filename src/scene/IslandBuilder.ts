@@ -94,6 +94,8 @@ export function buildIslandAndSeabed(
   const cWarmSand = new THREE.Color(0xe7dfd0);
   const cSeabedSand = new THREE.Color(0xf4efe4);
   const cConcrete = new THREE.Color(0xd5d7d2);
+  const cGrassOlive = new THREE.Color(0x75924d);
+  const cGrassDeep = new THREE.Color(0x5f7c3c);
   const tmpColor = new THREE.Color();
 
   for (let i = 0; i < posAttr.count; i++) {
@@ -110,7 +112,25 @@ export function buildIslandAndSeabed(
       tmpColor.copy(cWarmSand).lerp(cDrySand, Math.min(1, (h - (WATER_LEVEL - 0.04)) / 0.18));
     } else {
       const grain = Math.sin(x * 0.9 + z * 0.7) * 0.5 + 0.5;
-      tmpColor.copy(cDrySand).lerp(cWarmSand, grain * 0.25);
+      tmpColor.copy(cDrySand).lerp(cWarmSand, grain * 0.22);
+
+      // Organic coastal grass meadows painted directly into the undulating terrain vertices
+      const inFacilityZone =
+        (x > -6.5 && x < 4.4 && z > -8.2 && z < -2.6) ||
+        (x > -5.2 && x < -2.0 && z > -3.8 && z < -0.8);
+      if (!inFacilityZone && h > WATER_LEVEL + 0.17) {
+        const meadowNoise =
+          Math.sin(x * 0.52 + 1.1) * Math.cos(z * 0.58 - 0.4) * 0.5 +
+          Math.sin((x - z) * 0.85 + 0.7) * 0.28 +
+          Math.cos(x * 1.35 + z * 1.15) * 0.16;
+        const inlandBoost = Math.min(0.42, (h - (WATER_LEVEL + 0.17)) * 1.45);
+        const grassVal = meadowNoise + inlandBoost;
+        if (grassVal > 0.06) {
+          const grassBlend = Math.min(1, (grassVal - 0.06) / 0.22);
+          const grassShade = tmpColor.clone().copy(cGrassOlive).lerp(cGrassDeep, grain * 0.55);
+          tmpColor.lerp(grassShade, grassBlend * 0.92);
+        }
+      }
     }
 
     colors[i * 3] = tmpColor.r;
@@ -157,13 +177,14 @@ export function buildIslandAndSeabed(
 
       float softCausticPattern(vec2 p, float t) {
         vec2 w = p + vec2(
-          sin(p.y * 0.55 + t * 1.1) * 0.35,
-          cos(p.x * 0.50 - t * 0.95) * 0.35
+          sin(p.y * 0.65 + t * 1.25) * 0.36,
+          cos(p.x * 0.60 - t * 1.10) * 0.36
         );
-        float c1 = sin(w.x * 1.35 + sin(w.y * 1.15 + t * 1.2));
-        float c2 = cos(w.y * 1.45 - cos(w.x * 1.25 - t * 1.05));
-        float c3 = sin((w.x + w.y) * 1.10 + t * 0.85);
-        return clamp((c1 + c2 + c3) * 0.333 * 0.5 + 0.5, 0.0, 1.0);
+        float c1 = sin(w.x * 1.55 + sin(w.y * 1.35 + t * 1.3));
+        float c2 = cos(w.y * 1.65 - cos(w.x * 1.45 - t * 1.15));
+        float c3 = sin((w.x - w.y) * 1.25 + t * 0.95);
+        float net = abs(c1 + c2 + c3) / 3.0;
+        return pow(clamp(1.0 - net * 1.45, 0.0, 1.0), 2.2);
       }`
     );
 
@@ -172,24 +193,28 @@ export function buildIslandAndSeabed(
       `float submergence = ${WATER_LEVEL.toFixed(2)} - vSeabedWorldPos.y;
       if (submergence > 0.0) {
         float depthNorm = clamp(submergence / 2.85, 0.0, 1.0);
-        float shoreBlend = smoothstep(0.0, 0.16, submergence);
+        float shoreBlend = smoothstep(0.0, 0.18, submergence);
 
-        // Luminous sunlit jelly absorption over bright coral sand (adapts to Lime / Curacao / Blackcurrant)
-        vec3 shallowTint = mix(vec3(0.92, 0.95, 0.92), uShallowColor, 0.72);
-        vec3 deepTint = mix(uShallowColor * 0.85, uDeepColor, 0.62);
-        vec3 jellyBedTint = mix(shallowTint, deepTint, pow(depthNorm, 0.72));
+        // Saturated Beer-Lambert jelly absorption over coral sand (stays vibrant through ACES Filmic tone mapping)
+        vec3 richShallow = pow(clamp(uShallowColor, 0.0, 1.0), vec3(1.38)) * 0.76;
+        vec3 richDeep = pow(clamp(uDeepColor, 0.0, 1.0), vec3(1.28)) * 0.68;
+        vec3 jellyBedTint = mix(richShallow, richDeep, pow(depthNorm, 0.68));
 
         // Preserve directional shadows cast by Drone Ship, Tugboat, Fairing Boat, and Sharks
         float luma = dot(outgoingLight, vec3(0.299, 0.587, 0.114));
-        float shadowPresence = clamp(luma / 0.72, 0.28, 1.08);
+        float shadowPresence = clamp(luma / 0.72, 0.25, 1.05);
 
-        vec3 underwaterSand = mix(outgoingLight, jellyBedTint * shadowPresence, shoreBlend * (0.64 + depthNorm * 0.24));
+        vec3 underwaterSand = mix(
+          outgoingLight,
+          jellyBedTint * (0.42 + 0.62 * shadowPresence),
+          shoreBlend * (0.82 + depthNorm * 0.14)
+        );
 
-        // Soft, organic dappled sunlight caustics (no harsh wireframe grid)
-        float dappleA = softCausticPattern(vSeabedWorldPos.xz * 0.85, uTime);
-        float dappleB = softCausticPattern(vSeabedWorldPos.xz * 1.45 + vec2(3.7, -2.1), uTime * 0.85);
-        float causticGlow = smoothstep(0.45, 0.88, dappleA * 0.6 + dappleB * 0.4);
-        underwaterSand += uCausticColor * causticGlow * shoreBlend * (1.0 - depthNorm * 0.38) * 0.085 * shadowPresence;
+        // Organic dappled sunlight caustics on the sloped lagoon sand
+        float dappleA = softCausticPattern(vSeabedWorldPos.xz * 0.82, uTime);
+        float dappleB = softCausticPattern(vSeabedWorldPos.xz * 1.38 + vec2(3.7, -2.1), uTime * 0.85);
+        float causticGlow = dappleA * 0.62 + dappleB * 0.38;
+        underwaterSand += uCausticColor * causticGlow * shoreBlend * (1.0 - depthNorm * 0.32) * 0.18 * shadowPresence;
 
         if (uStorm > 0.01) {
           underwaterSand *= mix(vec3(1.0), vec3(0.58, 0.68, 0.78), uStorm * 0.5);
@@ -346,9 +371,7 @@ export function buildIslandAndSeabed(
   bottomMesh.castShadow = true;
   root.add(bottomMesh);
 
-  // 3. SCULPTED COASTAL VEGETATION MATS & PAVED ROAD NETWORK
-  const grassOliveMat = new THREE.MeshStandardMaterial({ color: 0x76944e, roughness: 0.9 });
-  const grassLightMat = new THREE.MeshStandardMaterial({ color: 0x89a660, roughness: 0.9 });
+  // 3. COASTAL SCRUB BUSHES & PAVED ROAD NETWORK
   const scrubBushMat = new THREE.MeshStandardMaterial({ color: 0x4f6d32, roughness: 0.88 });
 
   const grassPatches: [number, number, number, number, number][] = [
@@ -365,19 +388,7 @@ export function buildIslandAndSeabed(
     [2.8, -4.1, 1.6, 1.0, -0.15],
   ];
 
-  grassPatches.forEach(([gx, gz, rx, rz, rot], idx) => {
-    const gy = evaluateSeabedHeight(gx, gz);
-    if (gy < WATER_LEVEL + 0.05) return;
-    const patch = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.92, 1.0, 0.042, 20),
-      idx % 2 === 0 ? grassOliveMat : grassLightMat
-    );
-    patch.position.set(gx, gy + 0.015, gz);
-    patch.scale.set(rx, 1, rz);
-    patch.rotation.y = rot;
-    patch.receiveShadow = true;
-    root.add(patch);
-
+  grassPatches.forEach(([gx, gz, rx, rz, rot]) => {
     for (let b = 0; b < 3; b++) {
       const ang = rot + b * 2.1;
       const bx = gx + Math.cos(ang) * rx * 0.55;

@@ -12,13 +12,6 @@ export interface RippleImpulse {
   strength: number;
 }
 
-/**
- * Shared terrain & seabed elevation profile matching the reference diorama:
- * - Main spaceport landmass across the rear (z < -1.8)
- * - Curved sandy spit/peninsula extending forward along the left edge (x < -6.8, forward to z ~ +4.6)
- * - Harbour concrete quay shelf on the right (x > 2.4, z < -0.6)
- * - Smooth, gradual lagoon seabed slope from the beach down toward the front-right deep corner
- */
 export function evaluateSeabedHeight(x: number, z: number): number {
   const coastCurve =
     -1.85 +
@@ -45,7 +38,6 @@ export function evaluateSeabedHeight(x: number, z: number): number {
     return 1.62 + inlandT * 0.32 + undulation * (0.35 + 0.65 * inlandT);
   }
 
-  // Smooth beach slope into shallow shelf and then gradual deep lagoon slope
   const shallowDrop = 1.0 - Math.exp(-distFromShore * 0.42);
   const crossSlope = ((x + BLOCK_HALF_SIZE) / (2 * BLOCK_HALF_SIZE)) * 0.66;
   const forwardSlope = Math.max(0, (z + 1.8) / 12.8) * 0.74;
@@ -237,6 +229,18 @@ varying vec3 vWorldNormal;
 varying float vSeabedY;
 varying vec2 vUv;
 
+float waveRippleCaustic(vec2 p, float t) {
+  vec2 w = p + vec2(
+    sin(p.y * 0.72 + t * 1.45) * 0.38,
+    cos(p.x * 0.68 - t * 1.25) * 0.38
+  );
+  float a = sin(w.x * 1.85 + sin(w.y * 1.55 + t * 1.6));
+  float b = cos(w.y * 1.95 - cos(w.x * 1.65 - t * 1.35));
+  float c = sin((w.x - w.y) * 1.45 + t * 1.15);
+  float net = abs(a + b + c) / 3.0;
+  return pow(clamp(1.0 - net * 1.65, 0.0, 1.0), 2.6);
+}
+
 void main() {
   float waterDepth = vWorldPos.y - vSeabedY;
   if (waterDepth < -0.015) {
@@ -247,47 +251,57 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorldPos);
   vec3 L = normalize(uSunDir);
 
-  // Subtle glossy micro-facets on the top gel surface
+  // Glossy multi-frequency wave facets on the top gel surface
   float nX =
-    cos(p.x * 1.45 + p.y * 0.95 + uTime * 2.1) * 0.016 +
-    sin(p.x * 2.7 - p.y * 2.2 - uTime * 1.6) * 0.009;
+    cos(p.x * 1.55 + p.y * 1.05 + uTime * 2.2) * 0.026 +
+    sin(p.x * 2.9 - p.y * 2.3 - uTime * 1.7) * 0.014;
   float nZ =
-    sin(p.y * 1.55 - p.x * 0.85 - uTime * 1.8) * 0.016 +
-    cos(p.x * 2.4 + p.y * 2.6 + uTime * 2.3) * 0.009;
+    sin(p.y * 1.65 - p.x * 0.95 - uTime * 1.9) * 0.026 +
+    cos(p.x * 2.5 + p.y * 2.7 + uTime * 2.4) * 0.014;
   vec3 N = normalize(vWorldNormal + vec3(nX, 0.0, nZ));
   vec3 H = normalize(L + V);
 
   float NdotV = max(dot(N, V), 0.001);
-  float fresnel = 0.03 + 0.97 * pow(1.0 - NdotV, 4.2);
+  float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 3.8);
 
   float depthNorm = clamp(waterDepth / 2.75, 0.0, 1.0);
-  vec3 bodyColor = mix(uShallowColor, uDeepColor, pow(depthNorm, 0.78));
+  // Deeply saturated jelly body tint so ACES tone mapping preserves vibrant Lime / Curacao / Blackcurrant hues
+  vec3 richShallow = pow(clamp(uShallowColor, 0.0, 1.0), vec3(1.28)) * 0.86;
+  vec3 richDeep = pow(clamp(uDeepColor, 0.0, 1.0), vec3(1.22)) * 0.78;
+  vec3 bodyColor = mix(richShallow, richDeep, pow(depthNorm, 0.72));
+
+  // Flowing organic wave-facet shimmer on the jelly surface (matching frame0, frame5, frame12)
+  float surfShimmer =
+    waveRippleCaustic(p * 0.78, uTime) * 0.62 +
+    waveRippleCaustic(p * 1.35 + vec2(4.1, -2.7), uTime * 0.85) * 0.38;
+  float shimmerMask = smoothstep(0.06, 0.45, waterDepth);
 
   // Studio sky reflection & crisp specular glints
-  vec3 skyReflect = mix(vec3(0.92, 0.98, 0.96), vec3(1.0), clamp(N.y, 0.0, 1.0));
-  float specTight = pow(max(dot(N, H), 0.0), 190.0) * 0.85;
-  float specBroad = pow(max(dot(N, H), 0.0), 28.0) * 0.14;
+  vec3 skyReflect = mix(uShallowColor * 0.95, vec3(1.0), 0.65);
+  float specTight = pow(max(dot(N, H), 0.0), 160.0) * 0.92;
+  float specBroad = pow(max(dot(N, H), 0.0), 24.0) * 0.18;
 
   // Shoreline foam ribbon where jelly meets sand beach or harbour quay
-  float shoreFoam = smoothstep(0.24, 0.0, waterDepth) * (0.46 + 0.16 * sin(p.x * 2.4 + uTime * 3.0));
+  float shoreFoam = smoothstep(0.24, 0.0, waterDepth) * (0.52 + 0.16 * sin(p.x * 2.4 + uTime * 3.0));
 
-  // Parallel white wave crest lines rolling gently near the harbour/beach (matching reference video)
+  // Parallel white wave crest lines rolling gently near the harbour/beach
   float wavePhase = fract(p.y * 0.38 + uTime * 0.30 + sin(p.x * 0.18) * 0.10);
   float crestLine =
     smoothstep(0.026, 0.0, abs(wavePhase - 0.5)) *
     smoothstep(0.25, 1.1, waterDepth) *
     smoothstep(6.2, -1.5, p.y) *
-    smoothstep(-1.5, 4.2, p.x) * 0.36;
+    smoothstep(-1.5, 4.2, p.x) * 0.38;
 
   // Crisp white refractive rim line around the cut edges of the jelly cube
   float edgeDist = 11.0 - max(abs(p.x), abs(p.y));
-  float rimLine = smoothstep(0.18, 0.0, edgeDist) * 0.82 + smoothstep(0.50, 0.0, edgeDist) * 0.16;
+  float rimLine = smoothstep(0.18, 0.0, edgeDist) * 0.85 + smoothstep(0.50, 0.0, edgeDist) * 0.18;
 
   // Rocket exhaust glow on the water during ignition/landing
   float rocketDist = length(vWorldPos - uRocketLightPos);
   vec3 rocketGlow = vec3(1.0, 0.58, 0.2) * (uRocketLightIntensity / (1.0 + rocketDist * rocketDist * 0.18));
 
-  vec3 finalColor = mix(bodyColor, skyReflect, fresnel * 0.42);
+  vec3 finalColor = mix(bodyColor, skyReflect, fresnel * 0.38);
+  finalColor += uCausticColor * surfShimmer * shimmerMask * 0.22;
   finalColor += uSpecularColor * (specTight + specBroad) + rocketGlow * 0.35;
   finalColor = mix(finalColor, vec3(0.98, 1.0, 0.99), clamp(shoreFoam + crestLine + rimLine, 0.0, 0.92));
 
@@ -295,11 +309,10 @@ void main() {
     finalColor = mix(finalColor, finalColor * vec3(0.55, 0.66, 0.78), uStorm * 0.5);
   }
 
-  // Crystal-clear top surface so the sunlit mint seabed, corals, sharks, and underwater shadows shine through clearly
   float alpha = clamp(
-    0.11 + depthNorm * 0.07 + fresnel * 0.20 + shoreFoam * 0.30 + crestLine * 0.26 + rimLine * 0.56 + specTight * 0.38,
-    0.11,
-    0.84
+    0.22 + depthNorm * 0.12 + fresnel * 0.22 + surfShimmer * 0.10 + shoreFoam * 0.32 + crestLine * 0.26 + rimLine * 0.56 + specTight * 0.38,
+    0.20,
+    0.86
   );
   gl_FragColor = vec4(finalColor, alpha);
 }
@@ -320,7 +333,6 @@ void main() {
 
   float topFactor = clamp(uv.y, 0.0, 1.0);
   float topY = jellyWaveAt(pos.xz);
-  // Bottom of the jelly wall tracks the sloped seabed so the limestone cross-section below is unobstructed
   float seabedY = clamp(seabedHeightAt(pos.xz), -1.95, topY + 0.08);
 
   vHeightFrac = topFactor;
@@ -360,14 +372,15 @@ void main() {
   float NdotV = max(abs(dot(N, V)), 0.001);
   float fresnel = 0.05 + 0.95 * pow(1.0 - NdotV, 3.2);
 
-  // Smooth depth gradient inside the vertical cut jelly wall
   float depthRatio = clamp(1.0 - vHeightFrac, 0.0, 1.0);
-  vec3 wallColor = mix(uShallowColor * 1.04, uDeepColor * 0.90, pow(depthRatio, 0.85));
+  vec3 richShallow = pow(clamp(uShallowColor, 0.0, 1.0), vec3(1.22)) * 0.92;
+  vec3 richDeep = pow(clamp(uDeepColor, 0.0, 1.0), vec3(1.18)) * 0.84;
+  vec3 wallColor = mix(richShallow, richDeep, pow(depthRatio, 0.82));
 
-  // Rich emerald-teal refractive meniscus band right where the jelly sits on the sloped limestone seabed
-  float seabedContactBand = smoothstep(0.16, 0.0, vHeightFrac);
-  vec3 seabedRimColor = uDeepColor * vec3(0.42, 0.68, 0.56);
-  wallColor = mix(wallColor, seabedRimColor, seabedContactBand * 0.68);
+  // Rich refractive meniscus band right where the jelly sits on the sloped limestone seabed
+  float seabedContactBand = smoothstep(0.18, 0.0, vHeightFrac);
+  vec3 seabedRimColor = richDeep * vec3(0.45, 0.68, 0.58);
+  wallColor = mix(wallColor, seabedRimColor, seabedContactBand * 0.72);
 
   // Subtle vertical internal light shafts inside the cut block face
   float coord = abs(N.x) > 0.5 ? vWorldPos.z : vWorldPos.x;
@@ -390,9 +403,9 @@ void main() {
   }
 
   float alpha = clamp(
-    0.34 + depthRatio * 0.16 + seabedContactBand * 0.24 + fresnel * 0.18 + rimHighlight * 0.42,
-    0.32,
-    0.88
+    0.42 + depthRatio * 0.18 + seabedContactBand * 0.24 + fresnel * 0.18 + rimHighlight * 0.42,
+    0.40,
+    0.90
   );
   gl_FragColor = vec4(wallColor, alpha);
 }
